@@ -1,0 +1,45 @@
+---
+# Valeurs par défaut du rôle supervision (étape 3)
+
+supervision_dossier: /opt/supervision
+
+# Versions des images, fixées volontairement (jamais « latest »).
+# À vérifier et mettre à jour : hub.docker.com/r/prom/prometheus et hub.docker.com/r/grafana/grafana
+supervision_prometheus_image: "prom/prometheus:v3.1.0"
+supervision_grafana_image: "grafana/grafana:11.4.0"
+
+# Prometheus et Grafana n'écoutent qu'en local : accès par tunnel SSH uniquement
+supervision_prometheus_port: 9090
+supervision_grafana_port: 3000
+supervision_ecoute: "127.0.0.1"
+
+# Durée de conservation des métriques (disque de 20 Go)
+supervision_prometheus_retention: "7d"
+supervision_prometheus_intervalle: "30s"
+
+# Port de cAdvisor (métriques des conteneurs), installé avec Docker sur les nœuds et le staging
+supervision_cadvisor_port: 8080
+
+# Mot de passe administrateur de Grafana, lu dans Parameter Store (ADR-09)
+supervision_grafana_admin_password_ssm: "/taiga/admin/grafana_admin_password"
+
+# --- PFD-34 : base de données et tableaux de bord ---
+supervision_postgres_exporter_image: "quay.io/prometheuscommunity/postgres-exporter:v0.15.0" # version fixée, à vérifier
+supervision_postgres_client_image: "postgres:17-alpine" # même version majeure que RDS
+supervision_db_hote_ssm: "/taiga/production/db_host" # écrit par Terraform (dossier donnees/)
+supervision_db_admin_password_ssm: "/taiga/production/postgres_password"
+supervision_db_monitoring_password_ssm: "/taiga/production/postgres_monitoring_password"
+
+# Tableaux de bord téléchargés depuis grafana.com (numéro, nom du fichier)
+supervision_tableaux:
+  - { id: 1860, nom: machines-node-exporter } # machines (node_exporter)
+  - { id: 14282, nom: application-conteneurs } # conteneurs de Taiga (cAdvisor)
+  - { id: 9628, nom: base-postgresql } # base de données (postgres_exporter)
+
+# --- PFD-36 : alertes ---
+supervision_alertmanager_image: "prom/alertmanager:v0.27.0" # version fixée, à vérifier
+supervision_alertmanager_port: 9093
+supervision_alerte_webhook_ssm: "/taiga/admin/alert_webhook_url"
+
+# blackbox_exporter : sonde le site de l'extérieur (module http_2xx inclus par défaut)
+supervision_blackbox_image: "prom/blackbox-exporter:v0.25.0"   # version fixée, à vérifier

@@ -1,0 +1,10 @@
+# Configuration de Gitleaks : les règles par défaut, plus une exception justifiée
+[extend]
+useDefault = true
+
+# Faux positif : sonar.projectKey est le nom public du projet dans SonarCloud, pas un jeton
+# (le jeton SonarCloud n'est jamais dans le dépôt : le runner de la CI le fournissait)
+[[allowlists]]
+description = "Clé de projet SonarCloud (identifiant public)"
+# Seules ces deux valeurs exactes sont exemptées
+regexes = ['''^projet-final-devops1_taiga-(front|backend)$''']

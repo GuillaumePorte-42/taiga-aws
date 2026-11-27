@@ -1,0 +1,30 @@
+---
+# Rôle swarm : forme le cluster Docker Swarm.
+# Le premier nœud du play crée le cluster, les autres le rejoignent en tant que managers.
+# Prérequis : le rôle docker doit avoir tourné avant (Docker installé et démarré).
+
+# Task 1 : prérequis pour les modules community.docker
+- name: Installation du SDK Python de Docker (requis par les modules community.docker)
+  ansible.builtin.apt:
+    name: python3-docker # bibliothèque Python qui permet aux modules Ansible de parler à Docker
+    state: present
+
+# Task 2 : création du cluster, uniquement sur le premier nœud
+- name: Initialisation du cluster sur le premier nœud
+  community.docker.docker_swarm:
+    state: present # le cluster doit exister : équivalent de "docker swarm init" (ne fait rien s'il existe déjà)
+    advertise_addr: "{{ ansible_default_ipv4.address }}" # IP privée du nœud, celle que les autres utiliseront pour le joindre (--advertise-addr)
+  register: swarm_init # enregistre le résultat de la task, qui contient les jetons (join tokens)
+  when: inventory_hostname == ansible_play_hosts_all[0] # seulement si la machine en cours est la première du play
+
+# Task 3 : ajout des autres nœuds au cluster
+- name: Ajout des autres nœuds comme managers
+  community.docker.docker_swarm:
+    state: join # le nœud doit rejoindre un cluster existant : équivalent de "docker swarm join"
+    advertise_addr: "{{ ansible_default_ipv4.address }}" # IP privée de ce nœud
+    join_token: "{{ hostvars[ansible_play_hosts_all[0]].swarm_init.swarm_facts.JoinTokens.Manager }}"
+    # jeton manager, lu dans le résultat "swarm_init" du premier nœud (hostvars = variables d'une autre machine)
+    remote_addrs: # adresse(s) d'un manager existant à contacter pour rejoindre le cluster
+      - "{{ hostvars[ansible_play_hosts_all[0]].ansible_default_ipv4.address }}:2377"
+  # IP privée du premier nœud + port 2377 (port de gestion du cluster Swarm)
+  when: inventory_hostname != ansible_play_hosts_all[0] # sur toutes les machines sauf la première (!= veut dire "différent de")

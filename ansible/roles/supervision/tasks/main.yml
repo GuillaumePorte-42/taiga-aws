@@ -1,0 +1,94 @@
+---
+# Rôle supervision : Prometheus + Grafana en conteneurs (étape 3)
+# Prérequis : le rôle docker (étape 2) doit être appliqué avant.
+
+- name: Créer les dossiers de la supervision
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ supervision_dossier }}"
+    - "{{ supervision_dossier }}/prometheus"
+    - "{{ supervision_dossier }}/grafana/provisioning/datasources"
+    - "{{ supervision_dossier }}/grafana/provisioning/dashboards"
+    - "{{ supervision_dossier }}/grafana/dashboards"
+
+- name: Générer la configuration de Prometheus à partir de l'inventaire
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ supervision_dossier }}/prometheus/prometheus.yml"
+    mode: "0644"
+  notify: Redémarrer Prometheus
+
+- name: Déclarer Prometheus comme source de données de Grafana
+  ansible.builtin.template:
+    src: grafana-source.yml.j2
+    dest: "{{ supervision_dossier }}/grafana/provisioning/datasources/prometheus.yml"
+    mode: "0644"
+  notify: Redémarrer Grafana
+
+- name: Déclarer le dossier des tableaux de bord de Grafana
+  ansible.builtin.template:
+    src: grafana-tableaux.yml.j2
+    dest: "{{ supervision_dossier }}/grafana/provisioning/dashboards/tableaux.yml"
+    mode: "0644"
+  notify: Redémarrer Grafana
+
+- name: Télécharger les tableaux de bord depuis grafana.com
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/{{ item.id }}/revisions/latest/download"
+    dest: "{{ supervision_dossier }}/grafana/dashboards/{{ item.nom }}.json"
+    mode: "0644"
+  loop: "{{ supervision_tableaux }}"
+
+- name: Relier chaque tableau de bord à notre source Prometheus
+  ansible.builtin.replace:
+    path: "{{ supervision_dossier }}/grafana/dashboards/{{ item.nom }}.json"
+    regexp: "\\$\\{DS_PROMETHEUS\\}"
+    replace: "prometheus"
+  loop: "{{ supervision_tableaux }}"
+
+- name: Utilisateur PostgreSQL de la supervision
+  ansible.builtin.import_tasks: postgres.yml
+
+- name: Créer le dossier d'Alertmanager
+  ansible.builtin.file:
+    path: "{{ supervision_dossier }}/alertmanager"
+    state: directory
+    mode: "0755"
+
+- name: Copier les règles d'alerte de Prometheus
+  ansible.builtin.copy:
+    src: alertes.yml
+    dest: "{{ supervision_dossier }}/prometheus/alertes.yml"
+    mode: "0644"
+  notify: Redémarrer Prometheus
+
+- name: Écrire la configuration d'Alertmanager (contient le webhook)
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ supervision_dossier }}/alertmanager/alertmanager.yml"
+    owner: "65534" # utilisateur « nobody » du conteneur Alertmanager
+    group: "65534"
+    mode: "0600" # lisible par Alertmanager seulement : le fichier contient le webhook
+  no_log: true
+  notify: Redémarrer Alertmanager
+
+- name: Déposer notre tableau de bord « Taiga · vue d'ensemble »
+  ansible.builtin.copy:
+    src: taiga-vue-ensemble.json
+    dest: "{{ supervision_dossier }}/grafana/dashboards/taiga-vue-ensemble.json"
+    mode: "0644"
+
+- name: Écrire le fichier Docker Compose (contient le mot de passe Grafana)
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ supervision_dossier }}/docker-compose.yml"
+    mode: "0600" # lisible par root seulement
+  no_log: true # le mot de passe n'apparaît jamais dans la sortie d'Ansible
+
+- name: Démarrer Prometheus et Grafana
+  community.docker.docker_compose_v2:
+    project_src: "{{ supervision_dossier }}"
+    state: present

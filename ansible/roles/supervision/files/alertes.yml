@@ -1,0 +1,122 @@
+---
+# Règles d'alerte de Prometheus (PFD-36, PFD-37)
+# Copié tel quel par Ansible : les {{ $labels... }} sont des modèles de Prometheus, pas de Jinja.
+groups:
+  - name: taiga
+    rules:
+      - alert: InstanceArretee
+        expr: up{job="machines"} == 0
+        for: 1m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Instance injoignable : {{ $labels.instance }}"
+          description: "node_exporter ne répond plus depuis 1 minute : machine arrêtée, ou exporteur en panne."
+
+      - alert: DisquePresquePlein
+        expr: >-
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+          / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.15
+        for: 2m
+        labels:
+          severity: attention
+        annotations:
+          summary: "Disque presque plein : {{ $labels.instance }}"
+          description: "Il reste moins de 15 % d'espace libre sur / ({{ $value | humanizePercentage }})."
+
+      - alert: ConteneurQuiRedemarre
+        # cAdvisor ajoute le nombre de redémarrages en label (restartcount) : chaque redémarrage
+        # automatique crée une NOUVELLE série. On compte donc les séries d'un même conteneur,
+        # en plus des changements d'heure de démarrage et des conteneurs Swarm recréés.
+        expr: >-
+          count by (instance, name) (count_over_time(container_start_time_seconds{name!=""}[15m])) >= 3
+          or
+          max by (instance, name) (changes(container_start_time_seconds{name!=""}[15m])) >= 3
+          or
+          count by (instance, container_label_com_docker_swarm_service_name) (
+            container_start_time_seconds{container_label_com_docker_swarm_service_name!=""} > time() - 900
+          ) > 3
+        for: 1m
+        labels:
+          severity: attention
+        annotations:
+          summary: "Conteneur qui redémarre en boucle sur {{ $labels.instance }}"
+          description: "Au moins 3 redémarrages en 15 minutes ({{ $labels.name }}{{ $labels.container_label_com_docker_swarm_service_name }})."
+
+      - alert: BaseIndisponible
+        expr: pg_up == 0 or up{job="base"} == 0
+        for: 1m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Base de données injoignable"
+          description: "postgres_exporter ne parvient plus à joindre RDS, ou ne répond plus lui-même, depuis 1 minute."
+
+      # Sondes de blackbox_exporter (jobs « site » et « api » de prometheus.yml.j2) :
+      # probe_success vaut 0 quand la réponse n'est pas un 2xx (502, délai dépassé, certificat…).
+      # « up » ne convient pas ici : il dit seulement que blackbox lui-même répond.
+      - alert: SiteWebInjoignable
+        expr: probe_success{job="site"} == 0
+        for: 1m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Site web injoignable : {{ $labels.instance }}"
+          description: "L'interface (front) ne répond plus en 2xx depuis 1 minute."
+
+      # L'interface peut répondre alors que l'API est en panne (incident 502 du 04/11) : sonde séparée
+      - alert: ApiInjoignable
+        expr: probe_success{job="api"} == 0
+        for: 1m
+        labels:
+          severity: critique
+        annotations:
+          summary: "API de Taiga injoignable : {{ $labels.instance }}"
+          description: "/api/v1/ ne répond plus en 2xx depuis 1 minute (back, passerelle ou base)."
+
+      # Un service de la stack a moins de copies que prévu (3 pour les services sans état, 1 pour les autres).
+      # absent() couvre le cas où il n'en reste plus aucune : count() ne renverrait alors rien.
+      - alert: ServiceTaigaIncomplet
+        expr: >-
+          count by (container_label_com_docker_swarm_service_name) (
+            container_start_time_seconds{container_label_com_docker_swarm_service_name=~"taiga_taiga-(gateway|front|back|protected)"}
+          ) < 3
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-gateway"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-front"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-back"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-protected"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-events"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-async"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-async-rabbitmq"})
+          or absent(container_start_time_seconds{container_label_com_docker_swarm_service_name="taiga_taiga-events-rabbitmq"})
+        for: 5m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Service incomplet : {{ $labels.container_label_com_docker_swarm_service_name }}"
+          description: "Moins de copies que prévu depuis 5 minutes ({{ $value }} en marche). Vérifier : docker service ps <service>."
+
+      # cAdvisor répond, mais ne voit aucun conteneur : la supervision des conteneurs est aveugle
+      # (cas vécu avec le stockage containerd de Docker). cAdvisor se voit au moins lui-même s'il fonctionne.
+      - alert: CadvisorAveugle
+        expr: >-
+          up{job="cadvisor"} == 1
+          unless on (instance)
+          count by (instance) (container_start_time_seconds{name!=""}) > 0
+        for: 5m
+        labels:
+          severity: attention
+        annotations:
+          summary: "cAdvisor ne voit aucun conteneur sur {{ $labels.instance }}"
+          description: "cAdvisor répond mais ne remonte aucun conteneur : vérifier le stockage de Docker (overlay2) et les volumes montés dans cAdvisor."
+
+      # La dernière sauvegarde réussie a plus de 26 h (une par jour, avec une marge).
+      # max() : la sauvegarde tourne sur le leader, qui peut changer de nœud.
+      - alert: SauvegardeTropVieille
+        expr: time() - max(taiga_sauvegarde_derniere_reussite_timestamp_seconds) > 26 * 3600
+        for: 10m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Aucune sauvegarde réussie depuis plus de 26 h"
+          description: "Dernière réussite il y a {{ $value | humanizeDuration }}. Vérifier le cron et le journal du script sur le leader Swarm."

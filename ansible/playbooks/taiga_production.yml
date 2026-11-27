@@ -1,0 +1,12 @@
+---
+# Déploiement de Taiga en production sur le cluster Swarm (PFD-26)
+# ansible-playbook -i inventories/production/aws_ec2.yml playbooks/taiga_production.yml
+- name: Taiga en production (stack Swarm)
+  hosts: role_swarm_node
+  become: true
+  tasks:
+    - name: Déployer la stack depuis le premier manager
+      ansible.builtin.include_role:
+        name: taiga
+        tasks_from: stack
+      run_once: true

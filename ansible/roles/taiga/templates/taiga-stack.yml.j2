@@ -1,0 +1,177 @@
+# Généré par Ansible (rôle taiga, stack) : ne pas modifier à la main. Secrets : droits 0600.
+# Stack Docker Swarm de la production (PFD-26). Différences avec le Compose du staging :
+#  - pas de base de données : RDS (POSTGRES_HOST dans back.env) ;
+#  - fichiers statiques et pièces jointes sur EFS, partagés par les 3 nœuds ;
+#  - « deploy » remplace « restart » et « depends_on », qu'ignore Swarm ;
+#  - valeurs écrites par Ansible : « docker stack deploy » ne lit pas de fichier .env.
+
+x-relance: &relance
+  restart_policy:
+    condition: any          # Swarm relance tout conteneur arrêté
+    delay: 5s
+x-maj-progressive: &maj_progressive
+  parallelism: 1            # un réplica à la fois
+  delay: 10s
+  order: stop-first        # un réplica par nœud : on arrête l'ancien avant de démarrer le nouveau ; les 2 autres servent pendant ce temps
+  failure_action: rollback  # en cas d'échec, retour à la version précédente
+  monitor: 30s
+
+x-journaux: &journaux
+  driver: awslogs           # journaux envoyés vers CloudWatch (PFD-62)
+  options:
+    awslogs-region: eu-west-3
+    awslogs-group: {{ taiga_journaux_groupe }}
+    tag: "{{ '{{' }}.Name{{ '}}' }}"          # un flux par conteneur, nommé comme lui
+    mode: non-blocking      # si CloudWatch ne répond pas, l'application continue de tourner
+    max-buffer-size: 4m
+
+x-volumes-back: &volumes_back
+  - {{ taiga_efs_dossier }}/static:/taiga-back/static
+  - {{ taiga_efs_dossier }}/media:/taiga-back/media
+
+services:
+  taiga-back:
+    image: {{ taiga_image_back }}{{ taiga_ref_back }}
+    env_file: back.env
+    volumes: *volumes_back
+    networks: [taiga]
+    logging: *journaux
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      replicas: {{ taiga_replicas }}
+      placement:
+        max_replicas_per_node: 1   # un réplica par nœud, donc par zone
+      <<: *relance
+      update_config: *maj_progressive
+      rollback_config:
+        parallelism: 1
+
+  taiga-async:
+    image: {{ taiga_image_back }}{{ taiga_ref_back }}
+    entrypoint: ["/taiga-back/docker/async_entrypoint.sh"]
+    env_file: back.env
+    volumes: *volumes_back
+    networks: [taiga]
+    logging: *journaux
+    deploy:
+      replicas: 1
+      <<: *relance
+
+  taiga-async-rabbitmq:
+    image: {{ taiga_image_rabbitmq }}
+    hostname: taiga-async-rabbitmq
+    environment:
+      RABBITMQ_ERLANG_COOKIE: "{{ taiga_secrets.rabbitmq_erlang_cookie }}"
+      RABBITMQ_DEFAULT_USER: taiga
+      RABBITMQ_DEFAULT_PASS: "{{ taiga_secrets.rabbitmq_pass }}"
+      RABBITMQ_DEFAULT_VHOST: taiga
+    volumes:
+      - taiga-async-rabbitmq-data:/var/lib/rabbitmq
+    networks: [taiga]
+    logging: *journaux
+    deploy:
+      replicas: 1
+      <<: *relance
+
+  taiga-events-rabbitmq:
+    image: {{ taiga_image_rabbitmq }}
+    hostname: taiga-events-rabbitmq
+    environment:
+      RABBITMQ_ERLANG_COOKIE: "{{ taiga_secrets.rabbitmq_erlang_cookie }}"
+      RABBITMQ_DEFAULT_USER: taiga
+      RABBITMQ_DEFAULT_PASS: "{{ taiga_secrets.rabbitmq_pass }}"
+      RABBITMQ_DEFAULT_VHOST: taiga
+    volumes:
+      - taiga-events-rabbitmq-data:/var/lib/rabbitmq
+    networks: [taiga]
+    logging: *journaux
+    deploy:
+      replicas: 1
+      <<: *relance
+
+  taiga-front:
+    image: {{ taiga_image_front }}{{ taiga_ref_front }}
+    environment:
+      TAIGA_URL: "https://{{ taiga_domaine }}"
+      TAIGA_WEBSOCKETS_URL: "wss://{{ taiga_domaine }}"
+      TAIGA_SUBPATH: ""
+      DEFAULT_LANGUAGE: "fr"
+    networks: [taiga]
+    logging: *journaux
+    deploy:
+      replicas: {{ taiga_replicas }}
+      placement:
+        max_replicas_per_node: 1
+      <<: *relance
+      update_config: *maj_progressive
+
+  taiga-events:
+    image: {{ taiga_image_events }}
+    environment:
+      RABBITMQ_USER: taiga
+      RABBITMQ_PASS: "{{ taiga_secrets.rabbitmq_pass }}"
+      TAIGA_SECRET_KEY: "{{ taiga_secrets.secret_key }}"
+    networks: [taiga]
+    logging: *journaux
+    deploy:
+      replicas: 1
+      <<: *relance
+
+  taiga-protected:
+    image: {{ taiga_image_protected }}
+    environment:
+      MAX_AGE: "360"
+      SECRET_KEY: "{{ taiga_secrets.secret_key }}"
+    networks: [taiga]
+    logging: *journaux
+    deploy:
+      replicas: {{ taiga_replicas }}
+      placement:
+        max_replicas_per_node: 1
+      <<: *relance
+      update_config: *maj_progressive
+
+  taiga-gateway:
+    image: {{ taiga_image_gateway }}
+    ports:
+      - "9000:80"             # chaque nœud répond sur 9000 (cible de l'ALB)
+    configs:
+      - source: taiga_conf
+        target: /etc/nginx/conf.d/default.conf
+    volumes:
+      - {{ taiga_efs_dossier }}/static:/taiga/static:ro
+      - {{ taiga_efs_dossier }}/media:/taiga/media:ro
+    networks: [taiga]
+    logging: *journaux
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: {{ taiga_replicas }}
+      placement:
+        max_replicas_per_node: 1
+      <<: *relance
+      update_config: *maj_progressive
+
+# Config nginx distribuée par Swarm ; son nom contient l'empreinte du fichier,
+# pour qu'une nouvelle version crée une nouvelle config
+configs:
+  taiga_conf:
+    name: taiga-conf-{{ lookup('ansible.builtin.file', role_path ~ '/files/taiga.conf') | hash('md5') | truncate(8, True, '') }}
+    file: ./taiga.conf
+
+volumes:
+  taiga-async-rabbitmq-data:
+  taiga-events-rabbitmq-data:
+
+networks:
+  taiga:
+    external: true
+    name: {{ taiga_reseau }}

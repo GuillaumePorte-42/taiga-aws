@@ -1,0 +1,16 @@
+#SPDX-License-Identifier: MIT-0
+---
+# defaults file for roles/efs
+# Variables du rôle efs (valeurs par défaut, modifiables dans group_vars)
+
+efs_id: "" # ID de l'EFS (fs-…) : en production, lu dans Parameter Store (/taiga/production/efs_id, écrit par terraform/production)
+efs_region: eu-west-3 # région AWS de l'EFS (Paris)
+efs_mount_point: /mnt/efs # dossier où l'EFS sera monté sur chaque nœud
+
+# Options de montage NFS recommandées par AWS :
+#   nfsvers=4.1         version du protocole NFS utilisée par EFS
+#   rsize / wsize       taille maximale des échanges en lecture / écriture (1 Mo)
+#   hard,timeo,retrans  en cas de coupure, on attend et on réessaie au lieu d'abandonner
+#   noresvport          reconnexion propre après une coupure réseau
+#   _netdev             au démarrage, attendre que le réseau soit prêt avant de monter
+efs_mount_options: "nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev"

@@ -1,0 +1,19 @@
+---
+# Réglages dans un fichier à part : le sshd_config d'origine n'est pas modifié
+- name: Durcir la configuration SSH
+  ansible.builtin.template:
+    src: ssh_durcissement.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-taiga.conf
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s # refuse d'installer une configuration invalide
+  notify: Redémarrer SSH
+
+# Autoriser des clés publiques en plus de celles de l'équipe (ex. la CI, sur le staging seulement)
+- name: Ajouter les clés SSH supplémentaires
+  ansible.posix.authorized_key:
+    user: ubuntu
+    key: "{{ lookup('ansible.builtin.file', item) }}"
+    state: present
+  loop: "{{ common_cles_ssh_supplementaires }}"
+  loop_control:
+    label: "{{ item | basename }}"

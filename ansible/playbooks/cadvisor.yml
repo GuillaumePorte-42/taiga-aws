@@ -1,0 +1,7 @@
+---
+# Métriques des conteneurs sur les machines qui font tourner Taiga
+- name: CAdvisor
+  hosts: role_staging:role_swarm_node
+  become: true
+  roles:
+    - cadvisor

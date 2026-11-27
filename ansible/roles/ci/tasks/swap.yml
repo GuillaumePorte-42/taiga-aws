@@ -1,0 +1,27 @@
+---
+- name: Créer le fichier d'échange
+  ansible.builtin.command: "fallocate -l {{ ci_swap_taille }} {{ ci_swap_fichier }}"
+  args:
+    creates: "{{ ci_swap_fichier }}" # ne s'exécute qu'une fois : idempotent
+  register: swap_cree
+
+- name: Protéger le fichier d'échange (lisible par root seulement)
+  ansible.builtin.file:
+    path: "{{ ci_swap_fichier }}"
+    mode: "0600"
+
+- name: Formater le fichier d'échange
+  ansible.builtin.command: "mkswap {{ ci_swap_fichier }}"
+  when: swap_cree.changed
+
+- name: Activer le fichier d'échange
+  ansible.builtin.command: "swapon {{ ci_swap_fichier }}"
+  when: swap_cree.changed
+
+- name: Activer le fichier d'échange à chaque démarrage
+  ansible.posix.mount:
+    src: "{{ ci_swap_fichier }}"
+    path: none
+    fstype: swap
+    opts: sw
+    state: present

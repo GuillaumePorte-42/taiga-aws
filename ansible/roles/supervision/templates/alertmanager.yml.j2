@@ -1,0 +1,13 @@
+# Géré par Ansible (rôle supervision) — contient l'adresse du webhook : droits 0600
+route:
+  receiver: equipe
+  group_by: [alertname, instance]
+  group_wait: 30s          # regroupe les alertes simultanées en un seul message
+  group_interval: 5m
+  repeat_interval: 4h      # rappel si le problème dure
+
+receivers:
+  - name: equipe
+    discord_configs:
+      - webhook_url: "{{ lookup('amazon.aws.aws_ssm', supervision_alerte_webhook_ssm, region='eu-west-3') }}"
+        send_resolved: true   # prévient aussi quand le problème est résolu

@@ -1,0 +1,51 @@
+---
+# Pare-feu des nœuds Swarm (en plus du SSH et de node_exporter du rôle common)
+ufw_regles_supplementaires:
+  # Taiga, depuis l'ALB (sous-réseaux publics)
+  - { port: 9000, from: 10.0.1.0/24 }
+  - { port: 9000, from: 10.0.2.0/24 }
+  - { port: 9000, from: 10.0.3.0/24 }
+  # Cluster Swarm, entre les nœuds (sous-réseaux applicatifs)
+  - { port: 2377, from: 10.0.11.0/24 }
+  - { port: 2377, from: 10.0.12.0/24 }
+  - { port: 2377, from: 10.0.13.0/24 }
+  - { port: 7946, from: 10.0.11.0/24 }
+  - { port: 7946, from: 10.0.12.0/24 }
+  - { port: 7946, from: 10.0.13.0/24 }
+  - { port: 7946, proto: udp, from: 10.0.11.0/24 }
+  - { port: 7946, proto: udp, from: 10.0.12.0/24 }
+  - { port: 7946, proto: udp, from: 10.0.13.0/24 }
+  - { port: 4789, proto: udp, from: 10.0.11.0/24 }
+  - { port: 4789, proto: udp, from: 10.0.12.0/24 }
+  - { port: 4789, proto: udp, from: 10.0.13.0/24 }
+  # Métriques des conteneurs (cAdvisor), depuis la supervision
+  - { port: 8080, from: "{{ reseau_supervision }}" }
+  # Réseau overlay chiffré (IPsec ESP, protocole 50, sans port), entre les nœuds
+  - { proto: esp, from: 10.0.11.0/24 }
+  - { proto: esp, from: 10.0.12.0/24 }
+  - { proto: esp, from: 10.0.13.0/24 }
+
+# Clés SSH en plus de celles de l'équipe : la CI déploie la prod
+common_cles_ssh_supplementaires:
+  - "{{ playbook_dir }}/../../cles_ssh/ci/taiga_ci.pub"
+
+# --- Taiga en production (PFD-26) ---
+taiga_domaine: taiga-ledevagilles.fr
+
+# Images figées par leur empreinte : la production exécute exactement l'image validée en staging
+taiga_ref_back: "@sha256:5216acb187577744f670bbe37101dcc65ecf8f0ab4386903429732e7626ef9c1"
+taiga_ref_front: "@sha256:9cbba1a37df96ab459f70026fd2872e7b8d23e44d144330899cdcad513f64cb2"
+
+# Base RDS : adresse écrite par Terraform (terraform/donnees) dans Parameter Store, lue au déploiement (PFD-61)
+taiga_postgres_hote: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/db_host', region=aws_region) }}"
+taiga_postgres_sslmode: require # RDS refuse les connexions non chiffrées
+
+# E-mails de la production : Amazon SES (domaine vérifié par DKIM, terraform/socle/ses.tf), compte en bac à sable
+taiga_email_backend: smtp
+taiga_email_hote: email-smtp.eu-west-3.amazonaws.com # point SMTP de SES à Paris (joignable depuis les nœuds, testé avec nc)
+taiga_email_port: 587 # SMTP avec STARTTLS : la connexion passe en chiffré avant l'envoi des identifiants
+taiga_email_tls: "True"
+# Identifiant et mot de passe SMTP : écrits par Terraform (socle) dans Parameter Store, jamais dans le dépôt
+taiga_email_utilisateur: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/email_host_user', region=aws_region) }}"
+taiga_email_mot_de_passe: "{{ taiga_secrets.email_host_password }}"
+

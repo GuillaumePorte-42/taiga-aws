@@ -1,0 +1,12 @@
+#SPDX-License-Identifier: MIT-0
+---
+# defaults file for roles/docker
+
+# Versions épinglées : relevées le 05/11 sur le staging et node-1 (identiques), avant la reconstruction.
+# Sans elles, apt installe la dernière version du dépôt, jamais testée chez nous.
+# Changer de version = changer ces lignes par une MR, tester sur le staging, puis docs/reference/versions_outils.md.
+# Guillemets obligatoires : le « 5: » (epoch) fait partie de la version.
+docker_version: "5:29.9.3-1~ubuntu.24.04~noble"
+docker_containerd_version: "2.4.2-3~ubuntu.24.04~noble"
+docker_buildx_version: "0.38.1-1~ubuntu.24.04~noble"
+docker_compose_version: "5.7.0-1~ubuntu.24.04~noble"

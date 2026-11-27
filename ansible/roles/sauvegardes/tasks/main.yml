@@ -1,0 +1,83 @@
+---
+# unzip est nécessaire pour ouvrir l'installeur de l'AWS CLI
+- name: Installer unzip
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# Lire la version installée (s'il y en a une) sans rien changer
+- name: Lire la version de l'AWS CLI
+  ansible.builtin.command: /usr/local/bin/aws --version
+  register: sauvegardes_awscli_installee
+  changed_when: false
+  failed_when: false
+
+# Télécharger, ouvrir et installer seulement si la version n'est pas la bonne
+- name: Installer l'AWS CLI {{ sauvegardes_awscli_version }}
+  when: ("aws-cli/" ~ sauvegardes_awscli_version) not in (sauvegardes_awscli_installee.stdout | default(""))
+  block:
+    # L'installeur officiel d'AWS, pour cette version précise
+    - name: Télécharger l'installeur
+      ansible.builtin.get_url:
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-{{ sauvegardes_awscli_version }}.zip"
+        dest: /tmp/awscliv2.zip
+        mode: "0644"
+
+    # Ouvrir l'archive sur le nœud (remote_src : le fichier est déjà sur le nœud)
+    - name: Ouvrir l'installeur
+      ansible.builtin.unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: true
+
+    # --update remplace une ancienne version si elle existe
+    - name: Lancer l'installeur
+      ansible.builtin.command: /tmp/aws/install --update
+
+# Mot de passe de la base pour pg_dump : lisible par root seulement, jamais affiché
+- name: Déposer le fichier de connexion à la base (.pgpass)
+  ansible.builtin.template:
+    src: pgpass.j2
+    dest: /root/.pgpass
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# Dossier où le script écrit le dump et l'archive avant l'envoi
+- name: Créer le dossier de travail des sauvegardes
+  ansible.builtin.file:
+    path: "{{ sauvegardes_dossier_travail }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Le script de sauvegarde, exécutable par root seulement
+- name: Déposer le script de sauvegarde
+  ansible.builtin.template:
+    src: sauvegarde.sh.j2
+    dest: /usr/local/sbin/taiga-sauvegarde
+    owner: root
+    group: root
+    mode: "0700"
+
+# Dossier de la métrique « dernière sauvegarde réussie », lisible par node_exporter
+- name: Créer le dossier des métriques des sauvegardes
+  ansible.builtin.file:
+    path: "{{ sauvegardes_dossier_metriques }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# La sauvegarde chaque nuit, sur les 3 nœuds (le script ne fait rien sur un nœud qui n'est pas le leader)
+- name: Programmer la sauvegarde chaque nuit
+  ansible.builtin.cron:
+    name: taiga-sauvegarde
+    user: root
+    hour: "{{ sauvegardes_cron_heure }}"
+    minute: "{{ sauvegardes_cron_minute }}"
+    job: /usr/local/sbin/taiga-sauvegarde

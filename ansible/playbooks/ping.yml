@@ -1,0 +1,9 @@
+---
+# Vérifie qu'Ansible joint toutes les machines de l'inventaire choisi
+# ansible-playbook -i inventories/staging/aws_ec2.yml playbooks/ping.yml
+- name: Tester la connexion à toutes les machines
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping Ansible (connexion SSH + Python disponibles)
+      ansible.builtin.ping:

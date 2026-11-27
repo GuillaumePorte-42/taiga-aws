@@ -1,0 +1,94 @@
+---
+# La construction de l'image (le front livré est déjà construit par Taiga)
+stages:
+  - test
+  - qualite
+  - build
+
+# Vérifie que l'image se construit, sur chaque branche de travail (sans la publier)
+verifier-image:
+  stage: test
+  image: docker:29.9.2
+  services:
+    - name: docker:29.9.2-dind
+      variables:
+        HEALTHCHECK_TCP_PORT: "2376"
+  variables:
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+  rules:
+    - if: $CI_COMMIT_BRANCH != "staging" && $CI_COMMIT_BRANCH != "production"
+  script:
+    # Construit l'image sans la pousser : on vérifie seulement que le Dockerfile marche
+    - docker build -t front-verif -f docker/Dockerfile .
+
+# Tests unitaires du front : construit le front puis lance Karma dans Chromium sans fenêtre, sur chaque commit
+tests-unitaires:
+  stage: test
+  image: node:16.20.2-bookworm
+  variables:
+    # Karma cherche le navigateur à cet endroit
+    CHROME_BIN: /usr/bin/chromium
+  # Seulement sur les branches d'environnement, pour économiser les minutes des runners partagés
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging" || $CI_COMMIT_BRANCH == "production"
+  # Garde les paquets npm téléchargés d'un pipeline à l'autre (clé = package-lock.json)
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+  before_script:
+    # Chromium : le navigateur dans lequel Karma exécute les tests
+    - apt-get update && apt-get install -y --no-install-recommends chromium
+    # 8 dépendances sont sur GitHub en SSH : on les force en HTTPS, comme la CI officielle
+    - git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+    # Installe exactement les versions de package-lock.json, en réutilisant le cache
+    - npm ci --cache .npm --prefer-offline
+  script:
+    # gulp deploy (construit dist/) puis Karma une seule fois dans ChromeHeadlessCI
+    - npm run ci:test
+
+sonarcloud:
+  stage: qualite
+  image: sonarsource/sonar-scanner-cli:11.1   # Version fixe (jamais latest)
+  tags:
+    - taiga-ci                                # Obligatoire : fournit SONAR_TOKEN
+  variables:
+    SONAR_HOST_URL: "https://sonarcloud.io"
+    GIT_DEPTH: "0"                            # Historique complet pour le nouveau code
+  script:
+    - sonar-scanner -Dsonar.qualitygate.wait=true   # Attend le verdict de la quality gate
+  rules:
+    # Analyse à la demande (bouton "Run pipeline") ou planifiée chaque semaine
+    - if: $CI_COMMIT_BRANCH == "staging" && $CI_PIPELINE_SOURCE =~ /^(web|schedule)$/
+    # Sinon, seulement si le code analysé ou la conf sonar a changé
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes:
+        - "app/**/*"
+        - sonar-project.properties
+      allow_failure: true
+
+# Construit l'image du front et la publie dans le registre GitLab (job repris de Samuel)
+construire-image:
+  stage: build
+  image: docker:29.9.2
+  services:
+    - name: docker:29.9.2-dind
+      variables:
+ 
+        HEALTHCHECK_TCP_PORT: "2376"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging"
+  variables:
+    # Le client parle au démon "docker" en TLS, avec les certificats partagés dans /certs
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+  # Automatique, seulement sur les branches des environnements
+  script:
+    # Connexion au registre GitLab avec le jeton temporaire du job
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # Étiquette unique : environnement + commit (ex. staging-a1b2c3d), qui ne change jamais
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA" -f docker/Dockerfile .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA"

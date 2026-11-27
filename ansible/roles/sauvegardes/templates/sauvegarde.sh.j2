@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Sauvegarde de Taiga (production) : base RDS + médias EFS vers S3.
+# Posé par Ansible (rôle sauvegardes) : ne pas modifier à la main sur le nœud.
+set -euo pipefail
+
+# En cas d'erreur : un message dans le journal système (journalctl -t taiga-sauvegarde)
+trap 'logger -t taiga-sauvegarde "ECHEC ligne $LINENO"' ERR
+
+# Seul le leader Swarm sauvegarde : la base et l'EFS sont partagés par les 3 nœuds
+{% raw %}
+if [ "$(docker node inspect self --format '{{ .ManagerStatus.Leader }}')" != "true" ]; then
+{% endraw %}
+  logger -t taiga-sauvegarde "pas le leader : rien à faire"
+  exit 0
+fi
+
+# Noms des fichiers : date et heure en UTC, pour les trier facilement dans S3
+DATE=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+TRAVAIL="{{ sauvegardes_dossier_travail }}"
+DUMP="taiga-$DATE.dump"
+MEDIA="media-$DATE.tar.gz"
+HOTE=$(cut -d: -f1 /root/.pgpass)
+
+# 1. Dump de la base, avec pg_dump prêté par le conteneur PostgreSQL 17
+docker run --rm \
+  -v /root/.pgpass:/root/.pgpass:ro \
+  -v "$TRAVAIL":/sauvegarde \
+  -e PGSSLMODE=require \
+  {{ sauvegardes_image_postgres }} \
+  pg_dump -h "$HOTE" -p {{ sauvegardes_postgres_port }} -U {{ sauvegardes_postgres_utilisateur }} \
+    -d {{ sauvegardes_postgres_base }} --format=custom --no-password --file="/sauvegarde/$DUMP"
+
+# 2. Archive des médias (dossier de l'EFS)
+tar -czf "$TRAVAIL/$MEDIA" -C "{{ sauvegardes_dossier_media }}" .
+
+# 3. Envoi dans le bucket (chemin complet de aws : le PATH du cron ne contient pas /usr/local/bin)
+/usr/local/bin/aws s3 cp "$TRAVAIL/$DUMP" "s3://{{ sauvegardes_bucket }}/{{ sauvegardes_prefixe_base }}/$DUMP" --region {{ aws_region }} --only-show-errors
+/usr/local/bin/aws s3 cp "$TRAVAIL/$MEDIA" "s3://{{ sauvegardes_bucket }}/{{ sauvegardes_prefixe_media }}/$MEDIA" --region {{ aws_region }} --only-show-errors
+
+# 4. Nettoyage : le nœud ne garde rien, la copie est dans S3
+rm -f "$TRAVAIL/$DUMP" "$TRAVAIL/$MEDIA"
+
+# Supervision : heure de la dernière sauvegarde réussie, lue par node_exporter (alerte SauvegardeTropVieille).
+# Écriture dans un fichier temporaire puis renommage : node_exporter ne lit jamais un fichier à moitié écrit.
+DOSSIER_METRIQUES=/var/lib/node_exporter/textfile
+echo "taiga_sauvegarde_derniere_reussite_timestamp_seconds $(date +%s)" | sudo tee "$DOSSIER_METRIQUES/sauvegarde.prom.$$" > /dev/null
+sudo mv "$DOSSIER_METRIQUES/sauvegarde.prom.$$" "$DOSSIER_METRIQUES/sauvegarde.prom"
+
+logger -t taiga-sauvegarde "OK $DUMP $MEDIA"
+

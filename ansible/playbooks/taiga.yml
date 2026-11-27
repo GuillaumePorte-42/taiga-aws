@@ -1,0 +1,8 @@
+---
+# Déploie Taiga sur l'instance staging
+# ansible-playbook -i inventories/staging/aws_ec2.yml playbooks/taiga.yml
+- name: Taiga avec Docker Compose
+  hosts: role_staging
+  become: true
+  roles:
+    - taiga

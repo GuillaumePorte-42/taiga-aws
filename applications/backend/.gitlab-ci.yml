@@ -1,0 +1,91 @@
+---
+# Phase du pipeline : les tests (la construction de l'image viendra ensuite)
+stages:
+  - test
+  - qualite
+  - build
+
+# Tests rapides du back : configuration, migrations sur une base vide, tests unitaires
+tests-rapides:
+  stage: test
+  # Même version de Python que la CI officielle de Taiga
+  image: python:3.11
+  # Base PostgreSQL 17 lancée à côté du job, joignable par le nom "postgres"
+  services:
+    - name: postgres:17
+      alias: postgres
+  variables:
+    # Identifiants attendus par tests/config.py (base jetable du job, pas un secret)
+    POSTGRES_USER: taiga
+    POSTGRES_PASSWORD: taiga
+    POSTGRES_DB: taiga
+    # Hôte de la base, lu par tests/config_ci.py
+    POSTGRES_HOST: postgres
+    # Réglages utilisés par manage.py et par pytest
+    DJANGO_SETTINGS_MODULE: tests.config_ci
+    # Range le cache de pip dans le projet, seul endroit que GitLab sait garder
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # Garde les paquets téléchargés d'un pipeline à l'autre
+  cache:
+    key:
+      files:
+        - requirements.txt
+        - requirements-devel.txt
+    paths:
+      - .cache/pip
+  script:
+    # Installe les dépendances
+    - pip install --upgrade pip wheel
+    - pip install -r requirements.txt -r requirements-devel.txt
+    # La configuration est-elle cohérente ?
+    - python manage.py check
+    # Le schéma passe-t-il sur PostgreSQL 17 ?
+    - python manage.py migrate --noinput
+    # La logique isolée fonctionne-t-elle ?
+    - pytest -q tests/unit
+
+sonarcloud:
+  stage: qualite
+  image: sonarsource/sonar-scanner-cli:11.1  # Version fixe (jamais latest)
+  tags:
+    - taiga-ci                                # Obligatoire : fournit SONAR_TOKEN
+  variables:
+    SONAR_HOST_URL: "https://sonarcloud.io"
+    GIT_DEPTH: "0"                            # Historique complet pour le nouveau code
+    SONAR_SCANNER_OPTS: "-Xmx1536m"   # mémoire maximale du scanner (Java)
+    SONAR_SCANNER_JAVA_OPTS: "-Xmx1536m"   # mémoire du moteur d'analyse (celui qui plante)
+  script:
+    - sonar-scanner -Dsonar.qualitygate.wait=true   # Attend le verdict de la quality gate
+   # Automatique, seulement sur les branches des environnements
+  rules:
+    # Analyse à la demande (bouton "Run pipeline") ou planifiée chaque semaine
+    - if: $CI_COMMIT_BRANCH == "staging" && $CI_PIPELINE_SOURCE =~ /^(web|schedule)$/
+    # Sinon, seulement si le code analysé ou la conf sonar a changé
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes:
+        - "**/*.py"
+        - sonar-project.properties
+
+# Construit l'image du back et la publie dans le registre GitLab (job repris de Samuel)
+construire-image:
+  stage: build
+  image: docker:29.9.2
+  services:
+    - name: docker:29.9.2-dind
+      variables:
+        # Port à surveiller pour savoir que le démon est prêt
+        HEALTHCHECK_TCP_PORT: "2376"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging"
+  variables:
+    # Le client parle au démon "docker" en TLS, avec les certificats partagés dans /certs
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+  # Automatique, seulement sur les branches des environnements
+  
+  script:
+    # Connexion au registre GitLab avec le jeton temporaire du job
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # Étiquette unique : environnement + commit (ex. staging-a1b2c3d), qui ne change jamais
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA" -f docker/Dockerfile .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH-$CI_COMMIT_SHORT_SHA"

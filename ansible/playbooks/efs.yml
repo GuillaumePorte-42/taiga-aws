@@ -1,0 +1,8 @@
+---
+# Playbook efs : monte le stockage partagé EFS sur les nœuds Swarm de production.
+# Le staging n'est pas ciblé : le SG efs n'autorise que le SG nodes (port 2049).
+- name: Montage de l'EFS sur les nœuds swarm
+  hosts: role_swarm_node # les 3 nœuds de production (tag Role = swarm-node)
+  become: true # exécute les tasks en root (équivalent de sudo)
+  roles:
+    - efs # applique roles/efs/tasks/main.yml

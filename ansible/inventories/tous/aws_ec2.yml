@@ -1,0 +1,19 @@
+---
+# Inventaire de toutes les machines du projet (supervision, accès de l'équipe)
+plugin: amazon.aws.aws_ec2
+regions:
+  - eu-west-3
+filters:
+  tag:Projet: taiga-ledevagilles
+  instance-state-name: running
+
+keyed_groups:
+  - key: tags.Role
+    prefix: role
+    separator: "_"
+
+hostnames:
+  - tag:Name
+
+compose:
+  ansible_host: public_ip_address if tags.Role == 'bastion' else private_ip_address

@@ -1,0 +1,7 @@
+---
+# Playbook principal : les rôles s'ajoutent étape par étape
+- name: Base commune à toutes les machines (étape 1)
+  hosts: all
+  become: true
+  roles:
+    - common

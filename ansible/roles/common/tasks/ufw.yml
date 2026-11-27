@@ -1,0 +1,41 @@
+---
+# 1. D'abord autoriser SSH : sinon, activer UFW couperait notre propre accès
+- name: Autoriser SSH depuis le bastion et la CI
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    from_ip: "{{ item }}"
+  loop: "{{ common_ssh_sources }}"
+  when: "'role_bastion' not in group_names"
+
+- name: Autoriser SSH sur le bastion (le Security Group filtre déjà les IP de l'équipe)
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+  when: "'role_bastion' in group_names"
+
+- name: Autoriser la collecte des métriques depuis la supervision
+  community.general.ufw:
+    rule: allow
+    port: "{{ node_exporter_port | string }}"
+    proto: tcp
+    from_ip: "{{ reseau_supervision }}"
+
+- name: Règles propres au groupe de la machine
+  community.general.ufw:
+    rule: allow
+    # Port facultatif : certains protocoles n'en ont pas (ESP)
+    port: "{{ item.port | string if item.port is defined else omit }}"
+    proto: "{{ item.proto | default('tcp') }}"
+    from_ip: "{{ item.from }}"
+  loop: "{{ ufw_regles_supplementaires }}"
+
+# 2. Ensuite seulement, activer le pare-feu : tout le reste est refusé en entrée
+- name: Activer UFW (entrées refusées par défaut, sorties autorisées)
+  community.general.ufw:
+    state: enabled
+    default: deny
+    direction: incoming
+  when: common_ufw_actif | bool

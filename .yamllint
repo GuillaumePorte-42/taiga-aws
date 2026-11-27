@@ -1,0 +1,6 @@
+---
+# Configuration de yamllint : règles par défaut, lignes jusqu'à 130 caractères
+extends: default
+rules:
+  line-length:
+    max: 130

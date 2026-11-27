@@ -1,0 +1,101 @@
+---
+# Déploie Taiga en production sur le cluster Docker Swarm (PFD-26)
+# Appelé par playbooks/taiga_production.yml avec : include_role name=taiga tasks_from=stack
+# Le staging continue d'utiliser tasks/main.yml (Docker Compose).
+# Toutes les tâches s'exécutent une seule fois, sur le premier nœud manager.
+
+# 0. Bibliothèques Python exigées par le module docker_stack
+- name: Installer les prérequis du module docker_stack
+  ansible.builtin.apt:
+    name:
+      - python3-jsondiff
+      - python3-yaml
+    state: present
+
+# 1. Dossiers de Taiga sur EFS (partagé : créés une fois, visibles des 3 nœuds)
+#    UID 999 : l'utilisateur qui fait tourner Taiga dans les conteneurs
+- name: Créer les dossiers static et media sur EFS
+  ansible.builtin.file:
+    path: "{{ taiga_efs_dossier }}/{{ item }}"
+    state: directory
+    owner: "999"
+    group: "999"
+    mode: "0755"
+  loop:
+    - static
+    - media
+
+# 2. Dossier de la stack, réservé à root (les fichiers contiennent des secrets)
+- name: Créer le dossier de la stack
+  ansible.builtin.file:
+    path: "{{ taiga_stack_dossier }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# 3. Configuration de la passerelle : le même fichier que le staging
+- name: Copier la configuration de la passerelle nginx
+  ansible.builtin.copy:
+    src: taiga.conf
+    dest: "{{ taiga_stack_dossier }}/taiga.conf"
+    mode: "0644"
+
+# 4. Variables du back et d'async, avec les secrets de Parameter Store
+- name: Écrire le fichier d'environnement du back
+  ansible.builtin.template:
+    src: back.env.j2
+    dest: "{{ taiga_stack_dossier }}/back.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# 5. Fichier de stack Swarm (contient aussi des secrets)
+- name: Écrire le fichier de stack
+  ansible.builtin.template:
+    src: taiga-stack.yml.j2
+    dest: "{{ taiga_stack_dossier }}/taiga-stack.yml"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# 6. Réseau overlay « attachable » : les conteneurs ponctuels (migrations,
+#    createsuperuser) peuvent s'y brancher (ADR-20). Chiffré entre les zones.
+- name: Créer le réseau overlay de Taiga
+  community.docker.docker_network:
+    name: "{{ taiga_reseau }}"
+    driver: overlay
+    attachable: true
+    driver_options:
+      encrypted: "true"
+
+# 7. Connexion au registre GitLab
+- name: Se connecter au registre GitLab
+  community.docker.docker_login:
+    registry_url: "{{ taiga_registre }}"
+    username: "{{ taiga_registre_utilisateur }}"
+    password: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/registry_token', region=aws_region) }}"
+  no_log: true
+
+# 8. Migrations, une seule fois, AVANT les réplicas (ADR-20)
+- name: Appliquer les migrations de la base
+  ansible.builtin.command: >-
+    docker run --rm
+    --network {{ taiga_reseau }}
+    --env-file {{ taiga_stack_dossier }}/back.env
+    --entrypoint python
+    {{ taiga_image_back }}{{ taiga_ref_back }}
+    manage.py migrate --noinput
+  register: taiga_migrations
+  changed_when: "'No migrations to apply' not in taiga_migrations.stdout"
+
+# 9. Déploiement, ou mise à jour progressive, de la stack
+- name: Déployer la stack Taiga sur le cluster
+  community.docker.docker_stack:
+    name: "{{ taiga_stack_nom }}"
+    compose:
+      - "{{ taiga_stack_dossier }}/taiga-stack.yml"
+    with_registry_auth: true # transmet l'accès au registre aux autres nœuds
+    state: present

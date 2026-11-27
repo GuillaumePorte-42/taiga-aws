@@ -1,0 +1,19 @@
+---
+# Valeurs par défaut du rôle ci (étape 4)
+
+# Fichier d'échange : l'instance t3.small n'a que 2 Go de mémoire
+ci_swap_fichier: /swapfile
+ci_swap_taille: 2G
+
+# GitLab Runner
+ci_gitlab_url: "https://gitlab.com"
+ci_runner_nom: "taiga-ci"
+ci_runner_token_ssm: "/taiga/ci/gitlab_runner_token"
+ci_runner_image_defaut: "alpine:3.20" # image utilisée si un job n'en précise pas
+ci_runner_concurrent: 1 # un seul job à la fois (2 Go de mémoire)
+
+# Docker-in-Docker (construction d'images dans les jobs) : nécessite le mode privilégié
+ci_runner_privileged: true
+
+# Jeton SonarCloud, transmis aux jobs par le runner (aucune variable secrète dans GitLab, ADR-09)
+ci_sonar_token_ssm: "/taiga/ci/sonar_token"

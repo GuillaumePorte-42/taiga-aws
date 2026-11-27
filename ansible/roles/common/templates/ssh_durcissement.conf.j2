@@ -1,0 +1,12 @@
+# Géré par Ansible (rôle common) — ne pas modifier à la main
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+X11Forwarding no
+AllowAgentForwarding no
+{% if 'role_bastion' in group_names %}
+# Le bastion doit laisser passer les connexions ProxyJump
+AllowTcpForwarding yes
+{% else %}
+AllowTcpForwarding {{ common_ssh_tcp_forwarding }}
+{% endif %}

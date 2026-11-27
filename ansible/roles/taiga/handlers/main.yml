@@ -1,0 +1,7 @@
+---
+# La passerelle lit taiga.conf (monté) seulement au démarrage : la redémarrer quand ce fichier change (staging, Compose)
+- name: Redémarrer la passerelle
+  community.docker.docker_compose_v2:
+    project_src: "{{ taiga_dossier }}"
+    services: [taiga-gateway]
+    state: restarted

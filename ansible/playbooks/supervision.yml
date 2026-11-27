@@ -1,0 +1,8 @@
+---
+# Supervision (étape 3) : nécessite le rôle docker (étape 2, Samuel)
+- name: Supervision
+  hosts: role_monitoring
+  become: true
+  roles:
+    - docker
+    - supervision

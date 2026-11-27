@@ -1,0 +1,40 @@
+---
+# Mettre à false pour installer les règles sans activer le pare-feu (dépannage)
+common_ufw_actif: true
+
+# Valeurs par défaut du rôle common (modifiables dans group_vars)
+
+common_fuseau_horaire: Europe/Paris
+
+common_paquets:
+  - ca-certificates
+  - curl
+  - gnupg
+  - unattended-upgrades # mises à jour de sécurité automatiques
+  - ufw
+  - htop
+
+# node_exporter : métriques de la machine pour Prometheus (port 9100)
+node_exporter_version: "1.8.2" # à vérifier sur github.com/prometheus/node_exporter/releases
+node_exporter_port: 9100
+
+# Plages d'adresses autorisées par le pare-feu UFW.
+# À ajuster quand la nouvelle structure réseau de Guillaume sera fixée.
+reseau_bastion: 10.0.1.0/24 # sous-réseau public A (bastion)
+reseau_ci: 10.0.12.0/24 # sous-réseau de l'instance CI
+reseau_supervision: 10.0.11.0/24 # sous-réseau de l'instance supervision
+
+# SSH accepté depuis le bastion et la CI (comme les Security Groups)
+common_ssh_sources:
+  - "{{ reseau_bastion }}"
+  - "{{ reseau_ci }}"
+
+# Règles UFW propres à chaque groupe (définies dans group_vars/role_*.yml)
+ufw_regles_supplementaires: []
+# Clés publiques en plus de celles de l'équipe (ex. la CI), remplies par groupe dans group_vars/role_*.yml
+common_cles_ssh_supplementaires: []
+# Tunnels SSH : « no » partout, « local » sur la supervision (accès à Grafana par ssh -L)
+common_ssh_tcp_forwarding: "no"
+
+# Dossier lu par le collecteur textfile de node_exporter (métriques écrites par nos scripts, ex. la sauvegarde)
+common_node_exporter_textfile_dir: /var/lib/node_exporter/textfile

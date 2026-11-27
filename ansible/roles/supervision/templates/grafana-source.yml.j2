@@ -1,0 +1,9 @@
+# Géré par Ansible : Grafana est relié à Prometheus dès son démarrage
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

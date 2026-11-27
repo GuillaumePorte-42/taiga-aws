@@ -1,0 +1,85 @@
+# Géré par Ansible (rôle supervision) — généré à partir de l'inventaire
+global:
+  scrape_interval: {{ supervision_prometheus_intervalle }}
+
+# Règles d'alerte, et Alertmanager qui envoie les notifications (PFD-36)
+rule_files:
+  - /etc/prometheus/alertes.yml
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Prometheus se surveille lui-même
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Métriques des machines (node_exporter, installé par le rôle common)
+  - job_name: machines
+    static_configs:
+{% for hote in groups['all'] %}
+      - targets: ["{{ hostvars[hote]['private_ip_address'] }}:{{ node_exporter_port | default(9100) }}"]
+        labels:
+          instance: "{{ hote }}"
+          role: "{{ hostvars[hote]['tags']['Role'] | default('inconnu') }}"
+{% endfor %}
+
+  # Métriques des conteneurs (cAdvisor), sur les nœuds Swarm et le staging
+  - job_name: cadvisor
+    static_configs:
+{% for hote in (groups['role_swarm_node'] | default([])) + (groups['role_staging'] | default([])) %}
+      - targets: ["{{ hostvars[hote]['private_ip_address'] }}:{{ supervision_cadvisor_port }}"]
+        labels:
+          instance: "{{ hote }}"
+{% endfor %}
+
+  # Statistiques de la base RDS (postgres_exporter, PFD-34)
+  - job_name: base
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          instance: "rds-production"
+
+  # Disponibilité du site vue de l'extérieur, par blackbox_exporter (PFD-36)
+  - job_name: site
+    metrics_path: /probe
+    params:
+      module: [http_2xx]            # module de blackbox : réponse HTTP en 2xx attendue
+    static_configs:
+      - targets:                    # noms seuls : Prometheus refuse les adresses complètes ici
+          - taiga-ledevagilles.fr
+          - staging.taiga-ledevagilles.fr
+    relabel_configs:
+      # L'adresse complète à sonder, transmise à blackbox
+      - source_labels: [__address__]
+        regex: (.*)
+        target_label: __param_target
+        replacement: https://$1/
+      # Le site apparaît sous son nom dans Prometheus et Grafana
+      - source_labels: [__address__]
+        target_label: instance
+      # Prometheus interroge en réalité blackbox, qui sonde le site
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Disponibilité de l'API (passe par la passerelle, le back et la base) : le front seul ne suffit pas (incident 502 du 04/11)
+  - job_name: api
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - taiga-ledevagilles.fr
+          - staging.taiga-ledevagilles.fr
+    relabel_configs:
+      # Même principe que le job « site », mais sur l'adresse de l'API
+      - source_labels: [__address__]
+        regex: (.*)
+        target_label: __param_target
+        replacement: https://$1/api/v1/
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

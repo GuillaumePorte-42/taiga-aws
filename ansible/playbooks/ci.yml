@@ -1,0 +1,8 @@
+---
+# CI (étape 4) : nécessite le rôle docker (étape 2)
+- name: Instance CI
+  hosts: role_ci
+  become: true
+  roles:
+    - docker
+    - ci

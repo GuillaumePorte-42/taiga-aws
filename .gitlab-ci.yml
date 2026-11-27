@@ -1,0 +1,275 @@
+---
+# Phases du pipeline, exécutées dans cet ordre (une phase en échec arrête la suite)
+stages:
+  - validate
+  - deploy
+  - test
+
+# Image Docker de tous les jobs : Terraform, même version que dans la VM
+default:
+  image:
+    name: hashicorp/terraform:1.16.6
+    # Point d'entrée vidé : l'image lance terraform par défaut, GitLab a besoin d'un shell
+    entrypoint: [""]
+
+# Modèle : seulement sur les branches de travail (déjà vérifié avant la fusion : pas une 2e fois sur staging ni production),
+# et seulement si un fichier de terraform/ a changé (économise les minutes des runners partagés : 400 par mois pour le groupe)
+.si-terraform-change:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging" || $CI_COMMIT_BRANCH == "production"
+      when: never
+    - changes:
+        - terraform/**/*
+
+# Modèle : seulement sur les branches de travail, quel que soit le fichier changé (un secret peut se glisser n'importe où)
+.sur-branche-de-travail:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging" || $CI_COMMIT_BRANCH == "production"
+      when: never
+    - when: on_success
+
+# Modèle : sur staging, seulement si ce qui compose le staging (ou ses tests) change, ou pipeline lancé à la main (Run pipeline)
+.si-staging-change:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes:
+        - ansible/playbooks/taiga.yml
+        - ansible/roles/taiga/**/*
+        - ansible/inventories/staging/**/*
+        - ansible/requirements.yml
+        - ansible/ansible.cfg
+        - tests/**/*
+
+# Vérifie le format de tous les fichiers .tf du dépôt, sans rien modifier
+terraform-fmt:
+  extends: .si-terraform-change
+  stage: validate
+  script:
+    - terraform fmt -check -recursive
+
+# Vérifie que le code est valide, sans contacter AWS ni le bucket du state
+terraform-validate:
+  extends: .si-terraform-change
+  stage: validate
+  # Cache des providers : le provider AWS est téléchargé une fois, puis réutilisé par les 7 dossiers (au lieu de 7 téléchargements)
+  variables:
+    TF_PLUGIN_CACHE_DIR: "$CI_PROJECT_DIR/.terraform-plugins"
+  script:
+    - mkdir -p "$TF_PLUGIN_CACHE_DIR"
+    - |
+      for dossier in terraform/*/; do
+        echo "== $dossier"
+        terraform -chdir="$dossier" init -backend=false
+        terraform -chdir="$dossier" validate
+      done
+
+# Cherche des secrets dans tout l'historique Git (clés, mots de passe, tokens)
+gitleaks:
+  extends: .sur-branche-de-travail
+  stage: validate
+  image:
+    name: zricethezav/gitleaks:v8.30.1
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - gitleaks git --redact --verbose .
+
+# Analyse le code Terraform (variables inutilisées, syntaxe dépréciée, versions non fixées)
+tflint:
+  extends: .si-terraform-change
+  stage: validate
+  image:
+    name: ghcr.io/terraform-linters/tflint:v0.65.0
+    entrypoint: [""]
+  script:
+    - tflint --recursive
+
+# Cherche les failles de configuration dans le Terraform (SG trop ouverts, chiffrement absent…)
+trivy:
+  # trivy config analyse le Terraform : inutile s'il n'a pas changé
+  extends: .si-terraform-change
+  stage: validate
+  image:
+    name: aquasec/trivy:0.76.1
+    entrypoint: [""]
+  script:
+    # Échoue (code 1) seulement sur les alertes graves
+    # Pour tout voir sans échouer : trivy config --include-non-failures --severity LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 .
+    - trivy config --exit-code 1 --severity HIGH,CRITICAL .
+
+# DÉSACTIVÉ (point devant le nom) : syntaxe et style des fichiers YAML (CI, puis Ansible)
+.yamllint:
+  stage: validate
+  image: python:3.13-slim
+  script:
+    # Version épinglée pour un pipeline reproductible
+    - pip install yamllint==1.38.0
+    # Parcourt les fichiers YAML : formatage et erreurs de syntaxe
+    - yamllint .
+
+# DÉSACTIVÉ (point devant le nom) : bonnes pratiques Ansible, seulement si le dossier ansible/ existe
+.ansible-lint:
+  stage: validate
+  image: python:3.13-slim
+  rules:
+    - exists:
+        - ansible/**/*
+  script:
+    - pip install ansible-lint==26.10.1
+    - ansible-lint ansible/
+
+# Déploie Taiga sur le staging depuis le runner privé (le seul qui joint le VPC), puis vérifie qu'il répond
+deployer-staging:
+  extends: .si-staging-change
+  stage: deploy
+  image: python:3.13-slim
+  tags:
+    - taiga-ci
+  variables:
+    AWS_DEFAULT_REGION: eu-west-3
+  script:
+    # Client SSH : absent des images slim, nécessaire pour qu'Ansible joigne le staging
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client
+    # Ansible et boto3 aux mêmes versions que la VM de l'équipe (docs/reference/versions_outils.md)
+    - pip install --quiet ansible-core==2.19.14 boto3==1.43.121 botocore==1.43.121
+    # Collections aux versions figées du dépôt
+    - ansible-galaxy collection install -r ansible/requirements.yml
+    # Preuves : versions installées
+    - ansible --version | head -1
+    - ansible-galaxy collection list 2>/dev/null | grep -E "^(amazon\.aws|community\.docker|community\.general|ansible\.posix) "
+    # Preuve : le conteneur utilise le rôle IAM de la machine CI (aucune clé d'accès)
+    - python3 -c "import boto3; print(boto3.client('sts').get_caller_identity()['Arn'])"
+    # Clé SSH de la CI : lue dans Parameter Store, écrite dans un fichier 0600, jamais affichée
+    - install -m 600 /dev/null ~/.ssh_ci_key
+    - python3 -c "import boto3; print(boto3.client('ssm').get_parameter(Name='/taiga/staging/ci_ssh_private_key', WithDecryption=True)['Parameter']['Value'])" > ~/.ssh_ci_key
+    # Preuve sans afficher la clé : son empreinte doit être celle notée (SHA256:y4bi0yw8…)
+    - ssh-keygen -y -f ~/.ssh_ci_key | ssh-keygen -lf -
+    # Ansible lit la config du dépôt même si GitLab rend le dossier du clone accessible en écriture à tous
+    - export ANSIBLE_CONFIG="$CI_PROJECT_DIR/ansible/ansible.cfg"
+    - cd ansible
+    # Déploiement : connexion directe à l'IP privée (la CI est dans le VPC, pas de rebond par le bastion)
+    - ansible-playbook -i inventories/staging playbooks/taiga.yml --private-key ~/.ssh_ci_key -e 'ansible_ssh_common_args=""'
+    # Vérification de bout en bout par HTTPS (DNS, ALB, certificat, API, redirection) ; possible grâce à la règle 11 de l'ALB
+    - ansible-playbook playbooks/verifier_taiga.yml
+
+# Test E2E : un utilisateur se connecte au staging (Playwright), depuis le runner privé (sortie par la NAT, règle 11 de l'ALB)
+tests-e2e:
+  extends: .si-staging-change
+  stage: test
+  image: mcr.microsoft.com/playwright/python:v1.64.1-noble
+  tags:
+    - taiga-ci
+  # Après le déploiement s'il tourne dans ce pipeline (on teste la nouvelle version)
+  needs:
+    - job: deployer-staging
+      optional: true
+  variables:
+    AWS_DEFAULT_REGION: eu-west-3
+  script:
+    # Dépendances des tests (versions figées) + boto3 pour lire Parameter Store avec le rôle IAM de la machine CI
+    - pip install --quiet -r tests/e2e/requirements.txt boto3==1.43.121
+    # Mot de passe du compte e2e-test : lu dans Parameter Store, gardé dans une variable, jamais affiché
+    - export E2E_PASSWORD="$(python3 -c "import boto3; print(boto3.client('ssm').get_parameter(Name='/taiga/staging/e2e_password', WithDecryption=True)['Parameter']['Value'])")"
+    # Preuve sans afficher le secret : sa longueur (44 attendu)
+    - python3 -c "import os; print('longueur du mot de passe :', len(os.environ['E2E_PASSWORD']))"
+    # Le test ; capture d'écran seulement en cas d'échec
+    - pytest tests/e2e --screenshot only-on-failure --output test-results
+  # Les captures d'un échec, téléchargeables depuis GitLab pendant 1 semaine
+  artifacts:
+    when: on_failure
+    paths:
+      - test-results/
+    expire_in: 1 week
+
+# Test de charge Locust sur le staging, depuis le runner privé ; rapport HTML en artefact
+tests-charge:
+  stage: test
+  image: python:3.13-slim
+  tags:
+    - taiga-ci
+  # Automatique si l'application déployée change (image ou rôle taiga) : un échec rend le pipeline rouge
+  # Sinon, bouton manuel : un bouton non cliqué ou un essai raté ne bloque pas le pipeline
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging"
+      changes:
+        - ansible/inventories/staging/group_vars/all.yml
+        - ansible/roles/taiga/**/*
+    - if: $CI_COMMIT_BRANCH == "staging"
+      when: manual
+      allow_failure: true
+  # Après l'E2E (pas de charge sur une application cassée), et après le déploiement s'il tourne
+  # optional : le bouton manuel existe même quand l'E2E ne tourne pas dans ce pipeline
+  needs:
+    - job: deployer-staging
+      optional: true
+    - job: tests-e2e
+      optional: true
+  # 20 utilisateurs = toute l'équipe en même temps (en plus actifs que des humains) ; modifiable au lancement manuel (ex. 50)
+  variables:
+    AWS_DEFAULT_REGION: eu-west-3
+    LOCUST_UTILISATEURS: "20"
+    LOCUST_DUREE: "1m"
+  script:
+    # Locust (version figée) + boto3 pour lire Parameter Store avec le rôle IAM de la machine CI
+    - pip install --quiet -r tests/charge/requirements.txt boto3==1.43.121
+    # Même compte et même lecture du mot de passe que le job E2E, jamais affiché
+    - export E2E_PASSWORD="$(python3 -c "import boto3; print(boto3.client('ssm').get_parameter(Name='/taiga/staging/e2e_password', WithDecryption=True)['Parameter']['Value'])")"
+    # Sans interface : N utilisateurs, 2 nouveaux par seconde, pendant la durée choisie ; échoue s'il y a des erreurs
+    - locust -f tests/charge/locustfile.py --headless -u "$LOCUST_UTILISATEURS" -r 2 -t "$LOCUST_DUREE" --host https://staging.taiga-ledevagilles.fr --html rapport-locust.html
+  # Le rapport, même en cas d'échec ; gardé 30 jours pour comparer les versions entre elles
+  artifacts:
+    when: always
+    paths:
+      - rapport-locust.html
+    expire_in: 30 days
+
+# Modèle : sur production, bouton manuel seulement si ce qui compose la prod change (ou pipeline lancé à la main)
+.si-production-change:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "production"
+      changes:
+        - ansible/playbooks/taiga_production.yml
+        - ansible/roles/taiga/**/*
+        - ansible/inventories/production/**/*
+        - ansible/playbooks/group_vars/role_swarm_node.yml
+        - ansible/requirements.yml
+        - ansible/ansible.cfg
+      when: manual
+
+# Déploie Taiga en production (stack Swarm) depuis le runner privé, sur clic, puis vérifie qu'il répond
+deployer-production:
+  extends: .si-production-change
+  stage: deploy
+  image: python:3.13-slim
+  tags:
+    - taiga-ci
+  # Historique des déploiements de la prod dans GitLab (Operate → Environments)
+  environment:
+    name: production
+    url: https://taiga-ledevagilles.fr
+  # Un seul déploiement de la prod à la fois, même si deux personnes cliquent
+  resource_group: production
+  variables:
+    AWS_DEFAULT_REGION: eu-west-3
+  script:
+    # Client SSH : absent des images slim, nécessaire pour qu'Ansible joigne les nœuds
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client
+    # Ansible et boto3 aux mêmes versions que la VM de l'équipe (docs/reference/versions_outils.md)
+    - pip install --quiet ansible-core==2.19.14 boto3==1.43.121 botocore==1.43.121
+    # Collections aux versions figées du dépôt
+    - ansible-galaxy collection install -r ansible/requirements.yml
+    # Preuve : le conteneur utilise le rôle IAM de la machine CI (aucune clé d'accès)
+    - python3 -c "import boto3; print(boto3.client('sts').get_caller_identity()['Arn'])"
+    # Clé SSH de la CI (la même que pour le staging) : lue dans Parameter Store, fichier 0600, jamais affichée
+    - install -m 600 /dev/null ~/.ssh_ci_key
+    - python3 -c "import boto3; print(boto3.client('ssm').get_parameter(Name='/taiga/staging/ci_ssh_private_key', WithDecryption=True)['Parameter']['Value'])" > ~/.ssh_ci_key
+    # Preuve sans afficher la clé : son empreinte doit être celle notée (SHA256:y4bi0yw8…)
+    - ssh-keygen -y -f ~/.ssh_ci_key | ssh-keygen -lf -
+    # Ansible lit la config du dépôt même si GitLab rend le dossier du clone accessible en écriture à tous
+    - export ANSIBLE_CONFIG="$CI_PROJECT_DIR/ansible/ansible.cfg"
+    - cd ansible
+    # Déploiement de la stack depuis un manager : connexion directe aux IP privées (la CI est dans le VPC)
+    - ansible-playbook -i inventories/production playbooks/taiga_production.yml --private-key ~/.ssh_ci_key -e 'ansible_ssh_common_args=""'
+    # Vérification de bout en bout par HTTPS sur le vrai domaine (DNS, ALB, certificat, API, redirection)
+    - ansible-playbook playbooks/verifier_taiga.yml -e taiga_url=https://taiga-ledevagilles.fr

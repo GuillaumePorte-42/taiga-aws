@@ -1,0 +1,8 @@
+---
+# Pare-feu de la supervision : Prometheus, en conteneur, interroge le node_exporter
+# de sa propre machine depuis le réseau interne de Docker
+ufw_regles_supplementaires:
+  - { port: 9100, from: 172.16.0.0/12 }
+
+# Tunnels locaux autorisés : accès à Grafana et Prometheus par ssh -L (et rien d'autre)
+common_ssh_tcp_forwarding: "local"

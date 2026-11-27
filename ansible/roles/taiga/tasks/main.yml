@@ -1,0 +1,65 @@
+---
+# Déploie Taiga avec Docker Compose dans {{ taiga_dossier }}
+
+# 1. Le dossier de Taiga, réservé à root (le .env contiendra des secrets)
+- name: Créer le dossier de Taiga
+  ansible.builtin.file:
+    path: "{{ taiga_dossier }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# 2. Les fichiers fixes : Compose, outil d'administration, config de la passerelle
+- name: Copier les fichiers du Compose
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ taiga_dossier }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - docker-compose.yml
+    - docker-compose-inits.yml
+    - taiga.conf
+  # Un de ces fichiers a changé (dont taiga.conf) : la passerelle redémarre à la fin du déploiement
+  notify: Redémarrer la passerelle
+
+# 3. Le .env rempli avec les secrets de Parameter Store : lisible par root seulement, jamais affiché
+- name: Écrire le .env
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ taiga_dossier }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# 4. Connexion au registre GitLab avec le token de déploiement du groupe (lu dans Parameter Store)
+- name: Se connecter au registre GitLab
+  community.docker.docker_login:
+    registry_url: "{{ taiga_registre }}"
+    username: "{{ taiga_registre_utilisateur }}"
+    password: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/registry_token', region=aws_region) }}"
+  no_log: true
+
+# 5. Télécharger les images manquantes et lancer (ou mettre à jour) les 9 conteneurs
+- name: Lancer Taiga
+  community.docker.docker_compose_v2:
+    project_src: "{{ taiga_dossier }}"
+    state: present
+    pull: missing
+
+# 6. Comptes du staging, perdus à chaque reconstruction : super-utilisateur et compte des tests E2E
+#    Le script passe par l'entrée standard (mots de passe jamais sur la ligne de commande) ; le back peut mettre un moment à démarrer
+- name: Créer ou remettre à jour les comptes admin et e2e-test
+  ansible.builtin.command:
+    cmd: docker compose exec -T taiga-back python manage.py shell
+    chdir: "{{ taiga_dossier }}"
+    stdin: "{{ lookup('ansible.builtin.template', 'comptes.py.j2') }}"
+  register: taiga_comptes
+  until: taiga_comptes.rc == 0
+  retries: 10
+  delay: 15
+  changed_when: "'cree' in taiga_comptes.stdout or 'modifie' in taiga_comptes.stdout"
+  no_log: true

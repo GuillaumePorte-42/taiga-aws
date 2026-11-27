@@ -1,0 +1,47 @@
+---
+# Vérifie que Taiga répond de bout en bout : DNS, ALB, certificat HTTPS, application.
+# Staging (par défaut) :  ansible-playbook playbooks/verifier_taiga.yml
+# Production :            ansible-playbook playbooks/verifier_taiga.yml -e taiga_url=https://taiga-ledevagilles.fr
+- name: Vérification de Taiga
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    taiga_url: "https://staging.taiga-ledevagilles.fr"
+    essais: 10 # Taiga peut mettre quelques minutes à démarrer après un déploiement
+    attente: 15 # secondes entre deux essais
+  tasks:
+    - name: L'interface web répond, avec un certificat HTTPS valide
+      ansible.builtin.uri:
+        url: "{{ taiga_url }}/"
+        status_code: 200
+        validate_certs: true
+      register: reponse_front
+      until: reponse_front.status == 200
+      retries: "{{ essais }}"
+      delay: "{{ attente }}"
+
+    - name: L'API répond
+      ansible.builtin.uri:
+        url: "{{ taiga_url }}/api/v1/"
+        status_code: 200
+        return_content: true
+      register: reponse_api
+      until: reponse_api.status == 200
+      retries: "{{ essais }}"
+      delay: "{{ attente }}"
+
+    - name: L'API renvoie bien du JSON (et pas une page d'erreur de la passerelle)
+      ansible.builtin.assert:
+        that: reponse_api.json is defined
+        fail_msg: "L'API ne renvoie pas de JSON : vérifier la passerelle nginx et taiga-back"
+
+    - name: HTTP est redirigé vers HTTPS
+      ansible.builtin.uri:
+        url: "{{ taiga_url | replace('https://', 'http://') }}/"
+        follow_redirects: none
+        status_code: [301, 302]
+
+    - name: Résultat
+      ansible.builtin.debug:
+        msg: "Taiga répond correctement sur {{ taiga_url }}"

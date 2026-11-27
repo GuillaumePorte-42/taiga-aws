@@ -1,0 +1,9 @@
+---
+# Rôle ci : l'instance CI exécute les pipelines GitLab (étape 4)
+# Prérequis : rôle docker (étape 2) appliqué avant, jeton du runner dans Parameter Store.
+
+- name: Fichier d'échange (swap)
+  ansible.builtin.import_tasks: swap.yml
+
+- name: GitLab Runner
+  ansible.builtin.import_tasks: runner.yml

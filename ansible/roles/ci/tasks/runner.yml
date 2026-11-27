@@ -1,0 +1,58 @@
+---
+- name: Ajouter le dépôt officiel de GitLab Runner
+  ansible.builtin.deb822_repository:
+    name: gitlab-runner
+    types: deb
+    uris: https://packages.gitlab.com/runner/gitlab-runner/ubuntu/
+    suites: "{{ ansible_distribution_release }}"
+    components: main
+    signed_by: https://packages.gitlab.com/runner/gitlab-runner/gpgkey
+
+- name: Installer GitLab Runner
+  ansible.builtin.apt:
+    name: gitlab-runner
+    state: present
+    update_cache: true
+
+- name: Le runner est-il déjà enregistré ?
+  ansible.builtin.command: gitlab-runner list
+  register: runners_existants
+  changed_when: false
+  no_log: true # Masqué car la sortie contient des jetons d'accès
+
+- name: Enregistrer le runner auprès de GitLab
+  ansible.builtin.command: >-
+    gitlab-runner register --non-interactive
+    --url {{ ci_gitlab_url }}
+    --token {{ lookup('amazon.aws.aws_ssm', ci_runner_token_ssm, region='eu-west-3') }}
+    --name {{ ci_runner_nom }}
+    --executor docker
+    --docker-image {{ ci_runner_image_defaut }}
+    --docker-privileged={{ ci_runner_privileged | lower }}
+    --docker-volumes /cache
+  when: >
+    ci_runner_nom not in runners_existants.stdout and
+    ci_runner_nom not in runners_existants.stderr
+  no_log: true # Empêche l'affichage du jeton SSM dans les logs Ansible
+
+- name: Limiter le runner à un seul job à la fois
+  ansible.builtin.lineinfile:
+    path: /etc/gitlab-runner/config.toml
+    regexp: "^concurrent\\s*="
+    line: "concurrent = {{ ci_runner_concurrent }}"
+  notify: Redémarrer GitLab Runner
+
+- name: Démarrer GitLab Runner et l'activer au démarrage
+  ansible.builtin.systemd_service:
+    name: gitlab-runner
+    state: started
+    enabled: true
+
+- name: Transmettre le jeton SonarCloud aux jobs du runner
+  ansible.builtin.lineinfile:
+    path: /etc/gitlab-runner/config.toml
+    regexp: "^\\s*environment\\s*="
+    insertafter: "^\\s*executor\\s*="
+    line: '  environment = ["SONAR_TOKEN={{ lookup(''amazon.aws.aws_ssm'', ci_sonar_token_ssm, region=''eu-west-3'') }}"]'
+  no_log: true
+  notify: Redémarrer GitLab Runner

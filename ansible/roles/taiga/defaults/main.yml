@@ -1,0 +1,37 @@
+---
+# Valeurs par défaut du rôle taiga (modifiables dans group_vars)
+
+# Dossier de Taiga sur la machine : Compose, .env et config de la passerelle
+taiga_dossier: /opt/taiga
+
+# Nos images, construites et testées par notre CI ; l'étiquette est donnée par l'environnement (group_vars)
+taiga_image_back: registry.gitlab.com/projet-final-devops1/taiga-backend
+taiga_image_front: registry.gitlab.com/projet-final-devops1/taiga-frontend
+
+# Images officielles, toujours en version fixe (jamais latest)
+taiga_image_postgres: "{{ image_postgres }}"
+taiga_image_rabbitmq: rabbitmq:3.8-management-alpine
+taiga_image_events: taigaio/taiga-events:6.10.0
+taiga_image_protected: taigaio/taiga-protected:6.10.1
+taiga_image_gateway: nginx:1.30.6-alpine
+taiga_image_mailpit: axllent/mailpit:v1.33.0
+
+# Compte qui télécharge nos images (le token, lui, est lu dans Parameter Store)
+taiga_registre: registry.gitlab.com
+
+# --- Stack Swarm de la production (PFD-26) ---
+taiga_stack_dossier: /opt/taiga-stack
+taiga_stack_nom: taiga
+taiga_reseau: taiga-reseau
+taiga_replicas: 3 # un réplica par nœud pour les services sans état
+taiga_efs_dossier: /mnt/efs/taiga # EFS est monté dans /mnt/efs par le rôle efs
+
+taiga_journaux_groupe: /taiga/production # groupe CloudWatch créé par terraform/production
+
+# --- E-mails (staging : Mailpit par défaut ; production : SES, voir playbooks/group_vars/role_swarm_node.yml) ---
+taiga_email_backend: smtp # « smtp » envoie vraiment ; « console » écrit les mails dans les journaux
+taiga_email_hote: taiga-mailpit # serveur SMTP : le faux serveur du Compose du staging
+taiga_email_port: 1025 # port SMTP de Mailpit
+taiga_email_tls: "False" # pas de chiffrement : le trafic reste dans le réseau Docker de la machine
+taiga_email_utilisateur: "" # vide : Django ne s'authentifie pas (Mailpit n'en demande pas)
+taiga_email_mot_de_passe: "" # vide pour Mailpit ; en production, lu dans Parameter Store

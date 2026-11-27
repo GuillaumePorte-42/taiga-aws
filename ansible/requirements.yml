@@ -1,0 +1,12 @@
+---
+# Collections Ansible nécessaires : ansible-galaxy collection install -r requirements.yml
+# Versions figées = celles de la VM de l'équipe (30/10), pour que la CI fasse exactement la même chose
+collections:
+  - name: amazon.aws # inventaire dynamique aws_ec2 + lecture de Parameter Store
+    version: "10.1.2"
+  - name: ansible.posix # authorized_key (clé SSH de la CI, PFD-81)
+    version: "2.1.0"
+  - name: community.docker # installation et pilotage de Docker (PFD-60, PFD-62)
+    version: "4.8.5"
+  - name: community.general # modules génériques (PFD-60, PFD-62)
+    version: "11.4.2"

@@ -1,0 +1,8 @@
+# Géré par Ansible : Grafana charge les tableaux de bord de ce dossier
+apiVersion: 1
+providers:
+  - name: taiga
+    folder: Taiga
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

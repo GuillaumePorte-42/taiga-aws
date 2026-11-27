@@ -1,0 +1,8 @@
+---
+# Playbook swarm : forme le cluster Docker Swarm sur les 3 nœuds de production.
+# À lancer après docker.yml, avec l'inventaire production. Le staging tourne en Docker Compose (ADR-03) : pas de Swarm.
+- name: Cluster swarm (production)
+  hosts: role_swarm_node # les 3 nœuds de production (tag Role = swarm-node)
+  become: true # exécute les tasks en root (équivalent de sudo)
+  roles:
+    - swarm # applique roles/swarm/tasks/main.yml

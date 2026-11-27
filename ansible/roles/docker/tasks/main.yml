@@ -1,0 +1,62 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file for roles/docker
+- name: Installation pré-requis docker
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+    update_cache: true
+
+- name: Téléchargement clé GPG de docker
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Ajout du dépôt APT de docker
+  ansible.builtin.apt_repository:
+    repo: deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable
+    state: present
+
+# Versions épinglées (defaults/main.yml) : « paquet=version » est la syntaxe d'apt.
+# docker-ce-rootless-extras est installé d'office (paquet recommandé) : épinglé aussi, sinon il prendrait la dernière version.
+- name: Installation de docker
+  ansible.builtin.apt:
+    name:
+      - "docker-ce={{ docker_version }}"
+      - "docker-ce-cli={{ docker_version }}"
+      - "docker-ce-rootless-extras={{ docker_version }}"
+      - "containerd.io={{ docker_containerd_version }}"
+      - "docker-buildx-plugin={{ docker_buildx_version }}"
+      - "docker-compose-plugin={{ docker_compose_version }}"
+
+- name: Lancement de docker et activation au démarrage
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Ajout utilisateur au groupe docker
+  ansible.builtin.user:
+    name: ubuntu
+    groups: docker
+    append: true
+# Stockage classique « overlay2 » : le nouvel entrepôt d'images de containerd
+# empêche cAdvisor de voir les conteneurs (PFD-36). Les autres réglages éventuels
+# de daemon.json sont conservés.
+- name: Lire la configuration actuelle de Docker
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: docker_daemon_actuel
+  failed_when: false
+
+- name: Désactiver l'entrepôt d'images de containerd (retour à overlay2)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: >-
+      {{ ((docker_daemon_actuel.content | default('e30=') | b64decode | from_json)
+      | combine({'features': {'containerd-snapshotter': false}}, recursive=True))
+      | to_nice_json }}
+    mode: "0644"
+  notify: Redémarrer Docker

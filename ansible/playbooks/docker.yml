@@ -1,0 +1,8 @@
+---
+- name: docker sur toutes les machines sauf bastion
+  hosts: all:!role_bastion # toutes les instances sauf celles du groupe role_bastion (tag Role = bastion)
+  become: true # exécute les tasks en root (équivalent de sudo), nécessaire pour installer des paquets et gérer les services
+  # Une machine à la fois : le rôle peut redémarrer Docker (overlay2), et deux nœuds Swarm ne doivent jamais redémarrer ensemble (quorum)
+  serial: 1
+  roles:
+    - docker

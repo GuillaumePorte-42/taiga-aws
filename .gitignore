@@ -1,0 +1,20 @@
+# Terraform : dossier local (providers téléchargés), states, journal de plantage
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.exe
+
+# Valeurs des variables : peuvent contenir des secrets
+*.tfvars
+
+# Ansible
+*.retry
+
+# Environnements Python des tests (recréés depuis requirements.txt)
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Rapports des tests de charge (résultats, pas du code)
+rapport*.html

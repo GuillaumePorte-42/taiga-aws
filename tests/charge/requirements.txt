@@ -1,0 +1,2 @@
+# Version figée du test de charge (relevée sur PyPI le 02/11/2026)
+locust==2.47.0

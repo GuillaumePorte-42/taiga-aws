@@ -1,0 +1,7 @@
+# Chiffrement S3 : SSE-S3 (AES-256, clé gérée par AWS) accepté, clé KMS client écartée pour le coût
+AWS-0132
+
+
+# AWS-0053 : ALB public volontaire. C'est la seule porte d'entrée web : HTTPS seulement
+# (le port 80 ne fait que rediriger), staging réservé à l'équipe par une règle de l'écouteur.
+AWS-0053

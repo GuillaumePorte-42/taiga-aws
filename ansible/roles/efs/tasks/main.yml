@@ -1,0 +1,34 @@
+#SPDX-License-Identifier: MIT-0
+---
+# Rôle efs : monte le stockage partagé EFS sur chaque nœud, de façon permanente.
+# Prérequis : l'EFS et ses mount targets existent (Terraform), et le SG efs autorise le port 2049 depuis les nœuds.
+
+# Task 1 : sécurité, on s'arrête tout de suite si l'ID de l'EFS n'a pas été renseigné
+- name: Vérification que l'ID de l'EFS est renseigné
+  ansible.builtin.assert:
+    that:
+      - efs_id | length > 0 # la variable ne doit pas être vide
+    fail_msg: "efs_id est vide : renseigne l'ID de l'EFS (fs-…) dans group_vars"
+
+# Task 2 : le client NFS, nécessaire pour monter un EFS
+- name: Installation du client NFS
+  ansible.builtin.apt:
+    name: nfs-common # paquet qui fournit le support NFS
+    state: present # doit être installé
+    update_cache: true # équivalent de apt update avant l'installation
+
+# Task 3 : le dossier dans lequel on monte l'EFS
+- name: Création du point de montage
+  ansible.builtin.file:
+    path: "{{ efs_mount_point }}" # /mnt/efs par défaut
+    state: directory # doit exister et être un dossier (équivalent de mkdir -p)
+    mode: "0755" # root écrit, tout le monde peut lire et entrer
+
+# Task 4 : montage immédiat + ligne dans /etc/fstab, en une seule task
+- name: Montage de l'EFS et ajout dans /etc/fstab
+  ansible.posix.mount:
+    src: "{{ efs_id }}.efs.{{ efs_region }}.amazonaws.com:/" # adresse de l'EFS, construite à partir de son ID et de la région
+    path: "{{ efs_mount_point }}" # où le monter
+    fstype: nfs4 # type de système de fichiers (équivalent de mount -t nfs4)
+    opts: "{{ efs_mount_options }}" # options de montage (équivalent de mount -o …)
+    state: mounted # monté maintenant ET inscrit dans /etc/fstab pour les redémarrages

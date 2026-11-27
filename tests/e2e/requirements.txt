@@ -1,0 +1,4 @@
+# Versions figées des tests E2E (relevées sur PyPI le 02/11/2026)
+playwright==1.64.1
+pytest-playwright==0.10.0
+pytest==9.2.0

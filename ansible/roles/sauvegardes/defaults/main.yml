@@ -1,0 +1,27 @@
+---
+# Bucket et préfixes S3 (le bucket est créé par terraform/socle, output backups_bucket)
+sauvegardes_bucket: taiga-ledevagilles-backups
+sauvegardes_prefixe_base: postgres
+sauvegardes_prefixe_media: media
+
+# Ce qu'on sauvegarde : la base RDS et les médias sur l'EFS partagé
+sauvegardes_postgres_base: taiga
+sauvegardes_postgres_utilisateur: taiga
+sauvegardes_postgres_port: 5432
+sauvegardes_dossier_media: /mnt/efs/taiga/media
+
+# Dossier de travail sur le nœud (vidé après chaque envoi)
+sauvegardes_dossier_travail: /var/backups/taiga
+
+# Image qui prête pg_dump : l'image PostgreSQL du projet (playbooks/group_vars/all.yml)
+sauvegardes_image_postgres: "{{ image_postgres }}"
+
+# AWS CLI v2 installée sur les nœuds (installeur officiel, version figée)
+sauvegardes_awscli_version: "2.39.3"
+
+# Heure du cron (sur les 3 nœuds ; seul le leader agit)
+sauvegardes_cron_heure: "3"
+sauvegardes_cron_minute: "0"
+
+# Dossier lu par node_exporter (collecteur textfile) pour la supervision des sauvegardes (PFD-36)
+sauvegardes_dossier_metriques: /var/lib/node_exporter/textfile

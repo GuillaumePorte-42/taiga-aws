@@ -1,0 +1,61 @@
+# Géré par Ansible (rôle supervision)
+services:
+  # Prometheus : collecte les métriques, joignable seulement en local (tunnel SSH)
+  prometheus:
+    image: {{ supervision_prometheus_image }}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time={{ supervision_prometheus_retention }}
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alertes.yml:/etc/prometheus/alertes.yml:ro
+      - prometheus-donnees:/prometheus
+    ports:
+      - "{{ supervision_ecoute }}:{{ supervision_prometheus_port }}:9090"
+    restart: unless-stopped
+
+  # Statistiques de la base RDS, lues avec l'utilisateur « monitoring » (PFD-34)
+  postgres-exporter:
+    image: {{ supervision_postgres_exporter_image }}
+    environment:
+      DATA_SOURCE_URI: "{{ lookup('amazon.aws.aws_ssm', supervision_db_hote_ssm, region='eu-west-3') }}:5432/taiga?sslmode=require"
+      DATA_SOURCE_USER: monitoring
+      DATA_SOURCE_PASS: "{{ lookup('amazon.aws.aws_ssm', supervision_db_monitoring_password_ssm, region='eu-west-3') }}"
+    restart: unless-stopped   # aucun port publié : seul Prometheus le joint, sur le réseau du Compose
+
+  # Grafana : les tableaux de bord, joignable seulement en local (tunnel SSH)
+  grafana:
+    image: {{ supervision_grafana_image }}
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: "{{ lookup('amazon.aws.aws_ssm', supervision_grafana_admin_password_ssm, region='eu-west-3') }}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/taiga-vue-ensemble.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-donnees:/var/lib/grafana
+    ports:
+      - "{{ supervision_ecoute }}:{{ supervision_grafana_port }}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Alertmanager : envoie les alertes de Prometheus vers le canal de l'équipe (PFD-36)
+  alertmanager:
+    image: {{ supervision_alertmanager_image }}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "{{ supervision_ecoute }}:{{ supervision_alertmanager_port }}:9093"   # local uniquement
+    restart: unless-stopped
+
+  # blackbox_exporter : sonde la disponibilité du site, pour Prometheus (aucun port publié)
+  blackbox-exporter:
+    image: {{ supervision_blackbox_image }}
+    restart: unless-stopped
+
+# Volumes nommés : les données de Prometheus et de Grafana survivent à un redémarrage
+volumes:
+  prometheus-donnees:
+  grafana-donnees:

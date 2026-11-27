@@ -1,0 +1,4 @@
+---
+# cAdvisor : métriques des conteneurs pour Prometheus (port 8080)
+cadvisor_image: "gcr.io/cadvisor/cadvisor:v0.49.1" # version fixée, compatible avec notre Docker
+cadvisor_port: 8080

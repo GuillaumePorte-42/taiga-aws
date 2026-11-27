@@ -1,0 +1,3 @@
+# Fins de ligne LF dans le dépôt et à l'extraction, même sous Windows (core.autocrlf=true) :
+# un script shell ou un YAML Ansible en CRLF casse sous Linux
+* text=auto eol=lf

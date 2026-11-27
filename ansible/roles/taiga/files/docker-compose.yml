@@ -1,0 +1,187 @@
+---
+# Compose de Taiga, d'après taigaio/taiga-docker : les images et les valeurs viennent du .env écrit par Ansible
+
+# Variables communes au back et à async (base, adresse du site, e-mails, RabbitMQ)
+x-environment: &default-back-environment
+  POSTGRES_DB: "taiga"
+  POSTGRES_USER: "${POSTGRES_USER}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+  POSTGRES_HOST: "taiga-db"
+  TAIGA_SECRET_KEY: "${SECRET_KEY}"
+  TAIGA_SITES_SCHEME: "${TAIGA_SCHEME}"
+  TAIGA_SITES_DOMAIN: "${TAIGA_DOMAIN}"
+  TAIGA_SUBPATH: "${SUBPATH}"
+  EMAIL_BACKEND: "django.core.mail.backends.${EMAIL_BACKEND}.EmailBackend"
+  DEFAULT_FROM_EMAIL: "${EMAIL_DEFAULT_FROM}"
+  EMAIL_USE_TLS: "${EMAIL_USE_TLS}"
+  EMAIL_USE_SSL: "${EMAIL_USE_SSL}"
+  EMAIL_HOST: "${EMAIL_HOST}"
+  EMAIL_PORT: "${EMAIL_PORT}"
+  EMAIL_HOST_USER: "${EMAIL_HOST_USER}"
+  EMAIL_HOST_PASSWORD: "${EMAIL_HOST_PASSWORD}"
+  RABBITMQ_USER: "${RABBITMQ_USER}"
+  RABBITMQ_PASS: "${RABBITMQ_PASS}"
+  ENABLE_TELEMETRY: "${ENABLE_TELEMETRY}"
+  LANGUAGE_CODE: "${LANGUAGE_CODE}"
+  CELERY_TIMEZONE: "${CELERY_TIMEZONE}"
+
+# Volumes communs au back et à async (fichiers statiques et pièces jointes)
+x-volumes: &default-back-volumes
+  - taiga-static-data:/taiga-back/static
+  - taiga-media-data:/taiga-back/media
+
+services:
+  # Base PostgreSQL : les autres attendent qu'elle réponde (healthcheck)
+  taiga-db:
+    image: "${TAIGA_IMAGE_POSTGRES}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "taiga"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 2s
+      timeout: 15s
+      retries: 5
+      start_period: 3s
+    volumes:
+      - taiga-db-data:/var/lib/postgresql/data
+    networks:
+      - taiga
+
+  # API Django (notre image)
+  taiga-back:
+    image: "${TAIGA_IMAGE_BACK}"
+    restart: unless-stopped
+    environment: *default-back-environment
+    volumes: *default-back-volumes
+    networks:
+      - taiga
+    depends_on:
+      taiga-db:
+        condition: service_healthy
+      taiga-events-rabbitmq:
+        condition: service_started
+      taiga-async-rabbitmq:
+        condition: service_started
+
+  # Tâches longues (mails, exports) : même image que le back, autre point d'entrée
+  taiga-async:
+    image: "${TAIGA_IMAGE_BACK}"
+    restart: unless-stopped
+    entrypoint: ["/taiga-back/docker/async_entrypoint.sh"]
+    environment: *default-back-environment
+    volumes: *default-back-volumes
+    networks:
+      - taiga
+    depends_on:
+      taiga-db:
+        condition: service_healthy
+      taiga-events-rabbitmq:
+        condition: service_started
+      taiga-async-rabbitmq:
+        condition: service_started
+
+  # File de messages back → async
+  taiga-async-rabbitmq:
+    image: "${TAIGA_IMAGE_RABBITMQ}"
+    restart: unless-stopped
+    environment:
+      RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE}"
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USER}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASS}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST}"
+    hostname: "taiga-async-rabbitmq"
+    volumes:
+      - taiga-async-rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - taiga
+
+  # Interface (notre image) : conf.json généré au démarrage à partir de ces variables
+  taiga-front:
+    image: "${TAIGA_IMAGE_FRONT}"
+    restart: unless-stopped
+    environment:
+      TAIGA_URL: "${TAIGA_SCHEME}://${TAIGA_DOMAIN}"
+      TAIGA_WEBSOCKETS_URL: "${WEBSOCKETS_SCHEME}://${TAIGA_DOMAIN}"
+      TAIGA_SUBPATH: "${SUBPATH}"
+    networks:
+      - taiga
+
+  # Temps réel : pousse les changements aux navigateurs ouverts
+  taiga-events:
+    image: "${TAIGA_IMAGE_EVENTS}"
+    restart: unless-stopped
+    environment:
+      RABBITMQ_USER: "${RABBITMQ_USER}"
+      RABBITMQ_PASS: "${RABBITMQ_PASS}"
+      TAIGA_SECRET_KEY: "${SECRET_KEY}"
+    networks:
+      - taiga
+    depends_on:
+      taiga-events-rabbitmq:
+        condition: service_started
+
+  # File de messages back → events
+  taiga-events-rabbitmq:
+    image: "${TAIGA_IMAGE_RABBITMQ}"
+    restart: unless-stopped
+    environment:
+      RABBITMQ_ERLANG_COOKIE: "${RABBITMQ_ERLANG_COOKIE}"
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_USER}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASS}"
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST}"
+    hostname: "taiga-events-rabbitmq"
+    volumes:
+      - taiga-events-rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - taiga
+
+  # Vérifie le jeton avant de laisser télécharger une pièce jointe
+  taiga-protected:
+    image: "${TAIGA_IMAGE_PROTECTED}"
+    restart: unless-stopped
+    environment:
+      MAX_AGE: "${ATTACHMENTS_MAX_AGE}"
+      SECRET_KEY: "${SECRET_KEY}"
+    networks:
+      - taiga
+
+  # Faux serveur SMTP (staging seulement) : garde les mails de Taiga sans jamais les envoyer
+  taiga-mailpit:
+    image: "${TAIGA_IMAGE_MAILPIT}"
+    restart: unless-stopped
+    ports:
+      # Interface web en local seulement : on y accède par tunnel SSH, jamais depuis Internet
+      - "127.0.0.1:8025:8025"
+    networks:
+      - taiga
+
+  # Seule porte d'entrée : port 9000 de la machine (celui du target group de l'ALB)
+  taiga-gateway:
+    image: "${TAIGA_IMAGE_GATEWAY}"
+    restart: unless-stopped
+    ports:
+      - "9000:80"
+    volumes:
+      - ./taiga.conf:/etc/nginx/conf.d/default.conf:ro
+      - taiga-static-data:/taiga/static
+      - taiga-media-data:/taiga/media
+    networks:
+      - taiga
+    depends_on:
+      - taiga-front
+      - taiga-back
+      - taiga-events
+
+# Données gardées entre deux redémarrages (perdues si l'instance est recréée)
+volumes:
+  taiga-static-data:
+  taiga-media-data:
+  taiga-db-data:
+  taiga-async-rabbitmq-data:
+  taiga-events-rabbitmq-data:
+# Réseau interne : les conteneurs se joignent par leur nom (taiga-db, taiga-back…)
+networks:
+  taiga:

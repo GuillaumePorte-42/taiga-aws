@@ -1,0 +1,18 @@
+---
+- name: Redémarrer Prometheus
+  community.docker.docker_compose_v2:
+    project_src: "{{ supervision_dossier }}"
+    services: [prometheus]
+    state: restarted
+
+- name: Redémarrer Grafana
+  community.docker.docker_compose_v2:
+    project_src: "{{ supervision_dossier }}"
+    services: [grafana]
+    state: restarted
+
+- name: Redémarrer Alertmanager
+  community.docker.docker_compose_v2:
+    project_src: "{{ supervision_dossier }}"
+    services: [alertmanager]
+    state: restarted

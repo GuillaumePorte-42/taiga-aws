@@ -1,0 +1,27 @@
+---
+# Variables communes à toutes les machines de « prod »
+taiga_env: production
+aws_region: eu-west-3
+
+# Toutes les machines privées sont jointes en passant par le bastion (ProxyJump).
+# L'IP du bastion est lue dans l'inventaire dynamique : rien à écrire en dur.
+ansible_ssh_common_args: >-
+  -o ProxyJump=ubuntu@{{ hostvars[groups['role_bastion'][0]]['public_ip_address'] }}
+
+# Secrets lus dans Parameter Store au moment où ils sont utilisés (ADR-09).
+# Aucune valeur n'est écrite dans le dépôt. Toujours utiliser no_log: true
+# dans les tâches qui manipulent ces variables.
+taiga_secrets:
+  postgres_password: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/postgres_password', region=aws_region) }}"
+  secret_key: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/secret_key', region=aws_region) }}"
+  rabbitmq_pass: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/rabbitmq_pass', region=aws_region) }}"
+  rabbitmq_erlang_cookie: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/rabbitmq_erlang_cookie', region=aws_region) }}"
+  email_host_password: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/email_host_password', region=aws_region) }}"
+# ID de l'EFS de production : écrit par Terraform (terraform/production) dans Parameter Store, lu au moment du montage
+efs_id: "{{ lookup('amazon.aws.aws_ssm', '/taiga/' ~ taiga_env ~ '/efs_id', region=aws_region) }}"
+taiga_registre_utilisateur: gitlab+deploy-token-16742271
+
+# Sauvegardes à 16 h : la prod du projet est éteinte la nuit, le 3 h par défaut du rôle ne tournerait jamais
+# (en vraie production allumée en continu, on garderait 3 h)
+sauvegardes_cron_heure: "16"
+

@@ -1,0 +1,9 @@
+---
+# Playbook sauvegardes : AWS CLI, script et cron de sauvegarde sur les nœuds de production (PFD-82).
+# Les 3 nœuds reçoivent tout ; à l'heure du cron, seul le leader Swarm fait la sauvegarde.
+# ansible-playbook -i inventories/production/aws_ec2.yml playbooks/sauvegardes.yml
+- name: Sauvegardes de la production
+  hosts: role_swarm_node # les 3 nœuds de production (tag Role = swarm_node)
+  become: true # root : installer la CLI, puis la crontab de root
+  roles:
+    - sauvegardes # applique roles/sauvegardes/tasks/main.yml

@@ -1,0 +1,19 @@
+---
+# Rôle cadvisor : un conteneur par machine, qui observe tous les autres conteneurs
+# Prérequis : rôle docker (étape 2)
+- name: Démarrer cAdvisor
+  community.docker.docker_container:
+    name: cadvisor
+    image: "{{ cadvisor_image }}"
+    restart_policy: unless-stopped
+    privileged: true # nécessaire pour lire les statistiques du noyau
+    devices:
+      - /dev/kmsg
+    ports:
+      - "{{ cadvisor_port }}:8080"
+    volumes: # tout en lecture seule : cAdvisor observe, il ne modifie rien
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro

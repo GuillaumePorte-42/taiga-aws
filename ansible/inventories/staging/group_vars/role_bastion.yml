@@ -1,0 +1,3 @@
+---
+# Le bastion est joint directement : il ne passe pas par lui-même
+ansible_ssh_common_args: ""

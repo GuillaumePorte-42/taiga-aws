@@ -1,0 +1,26 @@
+# Généré par Ansible (rôle taiga, staging), exécuté par « manage.py shell » : comptes perdus à chaque reconstruction.
+# Crée le compte s'il manque, remet le mot de passe de Parameter Store s'il a changé, sinon ne fait rien.
+from django.contrib.auth import get_user_model
+
+Utilisateur = get_user_model()
+
+# (nom, e-mail, mot de passe, super-utilisateur ?)
+comptes = [
+    ({{ taiga_admin_nom | to_json }}, {{ taiga_admin_email | to_json }}, {{ taiga_admin_mdp | to_json }}, True),
+    ("e2e-test", "e2e-test@example.com", {{ taiga_e2e_mdp | to_json }}, False),
+]
+
+for nom, email, mdp, admin in comptes:
+    compte = Utilisateur.objects.filter(username=nom).first()
+    if compte is None:
+        if admin:
+            Utilisateur.objects.create_superuser(nom, email, mdp)
+        else:
+            Utilisateur.objects.create_user(nom, email, mdp)
+        print(nom, ": cree")
+    elif not compte.check_password(mdp):
+        compte.set_password(mdp)
+        compte.save()
+        print(nom, ": modifie")
+    else:
+        print(nom, ": ok")

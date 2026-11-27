@@ -1,0 +1,15 @@
+---
+# Rôle common : la base de toutes les machines du projet (PFD-60)
+# L'ordre compte : le pare-feu est activé APRÈS avoir autorisé SSH.
+
+- name: Paquets et réglages système
+  ansible.builtin.import_tasks: paquets.yml
+
+- name: Durcissement de SSH
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Pare-feu UFW
+  ansible.builtin.import_tasks: ufw.yml
+
+- name: Exporteur de métriques
+  ansible.builtin.import_tasks: node_exporter.yml

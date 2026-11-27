@@ -1,0 +1,14 @@
+---
+# Pare-feu du staging (en plus du SSH et de node_exporter du rôle common)
+ufw_regles_supplementaires:
+  - { port: 9000, from: 10.0.1.0/24 }
+  - { port: 9000, from: 10.0.2.0/24 }
+  - { port: 9000, from: 10.0.3.0/24 }
+  - { port: 8080, from: "{{ reseau_supervision }}" }
+
+# Clés SSH en plus de celles de l'équipe : la CI déploie le staging (PFD-81)
+common_cles_ssh_supplementaires:
+  - "{{ playbook_dir }}/../../cles_ssh/ci/taiga_ci.pub"
+
+# Tunnels SSH locaux autorisés (ssh -L), comme sur la supervision : interface de Mailpit (127.0.0.1:8025) depuis la VM
+common_ssh_tcp_forwarding: "local"

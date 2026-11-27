@@ -1,0 +1,25 @@
+---
+# Utilisateur PostgreSQL dédié à la supervision : rôle pg_monitor, lecture des statistiques seulement.
+# Créé depuis l'instance de supervision, avec un conteneur client PostgreSQL ponctuel.
+- name: Créer l'utilisateur « monitoring » dans RDS (idempotent)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -e
+      - "PGPASSWORD={{ lookup('amazon.aws.aws_ssm', supervision_db_admin_password_ssm, region='eu-west-3') }}"
+      - "{{ supervision_postgres_client_image }}"
+      - psql
+      - "host={{ lookup('amazon.aws.aws_ssm', supervision_db_hote_ssm, region='eu-west-3') }} dbname=taiga user=taiga sslmode=require"
+      - -v
+      - ON_ERROR_STOP=1
+      - -c
+      - >-
+        DO $$ BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'monitoring') THEN CREATE ROLE monitoring LOGIN; END IF;
+        END $$;
+        ALTER ROLE monitoring PASSWORD '{{ lookup('amazon.aws.aws_ssm', supervision_db_monitoring_password_ssm, region='eu-west-3') }}';
+        GRANT pg_monitor TO monitoring;
+  changed_when: false
+  no_log: true # la commande contient deux mots de passe

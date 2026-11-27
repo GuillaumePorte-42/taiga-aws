@@ -1,0 +1,23 @@
+---
+# Inventaire dynamique de la production (PFD-59)
+plugin: amazon.aws.aws_ec2
+regions:
+  - eu-west-3
+filters:
+  tag:Projet: taiga-ledevagilles
+  tag:Environnement:
+    - production # noeuds
+    - commun #  bastion, supervision, CI
+  instance-state-name: running
+
+# Un groupe par rôle : role_bastion, role_swarm_node, role_monitoring, role_ci
+keyed_groups:
+  - key: tags.Role
+    prefix: role
+    separator: "_"
+
+hostnames:
+  - tag:Name
+
+compose:
+  ansible_host: public_ip_address if tags.Role == 'bastion' else private_ip_address
